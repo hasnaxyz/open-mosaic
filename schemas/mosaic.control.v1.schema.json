@@ -7,6 +7,9 @@
     { "$ref": "#/$defs/receipt" },
     { "$ref": "#/$defs/queueList" },
     { "$ref": "#/$defs/auditList" },
+    { "$ref": "#/$defs/auditExport" },
+    { "$ref": "#/$defs/auditExportRecord" },
+    { "$ref": "#/$defs/auditVerify" },
     { "$ref": "#/$defs/queuedPrompt" },
     { "$ref": "#/$defs/observePane" },
     { "$ref": "#/$defs/paneUpdate" },
@@ -191,6 +194,115 @@
               "type": "array",
               "items": {
                 "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "auditHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "auditExport": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "id", "timestamp_ms", "source", "redacted", "record_count", "hash_algorithm", "chain_head"],
+          "properties": {
+            "event": { "const": "audit.export" },
+            "id": { "$ref": "#/$defs/id" },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" },
+            "source": { "type": "string" },
+            "redacted": { "type": "boolean" },
+            "record_count": { "type": "integer", "minimum": 0 },
+            "hash_algorithm": { "const": "sha256" },
+            "chain_head": {
+              "anyOf": [
+                { "$ref": "#/$defs/auditHash" },
+                { "type": "null" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "auditExportRecord": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "export_id", "sequence", "timestamp_ms", "hash_algorithm", "record_hash", "previous_hash", "chain_hash", "record"],
+          "properties": {
+            "event": { "const": "audit.export.record" },
+            "export_id": { "$ref": "#/$defs/id" },
+            "sequence": { "type": "integer", "minimum": 0 },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" },
+            "hash_algorithm": { "const": "sha256" },
+            "record_hash": { "$ref": "#/$defs/auditHash" },
+            "previous_hash": {
+              "anyOf": [
+                { "$ref": "#/$defs/auditHash" },
+                { "type": "null" }
+              ]
+            },
+            "chain_hash": { "$ref": "#/$defs/auditHash" },
+            "record": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "auditVerify": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "timestamp_ms", "source", "source_kind", "mode", "status", "record_count", "verified_records", "hash_algorithm", "chain_head", "errors"],
+          "properties": {
+            "event": { "const": "audit.verify" },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" },
+            "source": { "type": "string" },
+            "source_kind": {
+              "type": "string",
+              "enum": ["local_state", "file", "stdin"]
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["empty", "unknown", "raw_audit", "export"]
+            },
+            "status": {
+              "type": "string",
+              "enum": ["ok", "failed"]
+            },
+            "record_count": { "type": "integer", "minimum": 0 },
+            "verified_records": { "type": "integer", "minimum": 0 },
+            "hash_algorithm": {
+              "anyOf": [
+                { "const": "sha256" },
+                { "type": "null" }
+              ]
+            },
+            "chain_head": {
+              "anyOf": [
+                { "$ref": "#/$defs/auditHash" },
+                { "type": "null" }
+              ]
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["code", "line", "message"],
+                "properties": {
+                  "code": { "type": "string" },
+                  "line": { "type": "integer", "minimum": 1 },
+                  "message": { "type": "string" }
+                },
                 "additionalProperties": true
               }
             }

@@ -129,11 +129,25 @@ receipt-specific clear cannot discard unrelated queued prompts. Top-level
 ```sh
 mosaic audit list --limit 20
 mosaic audit list --redact
+mosaic audit export --redact > mosaic-audit.ndjson
+mosaic audit verify --file mosaic-audit.ndjson
+mosaic audit verify
 ```
 
 `audit list` returns an `audit.list` envelope with local audit records. Audit
 records are local observer data; consumers should treat them as append-only
 evidence, not as proof that a terminal process consumed a prompt.
+
+`audit export` emits NDJSON: one `audit.export` manifest followed by
+`audit.export.record` entries. Each entry contains a canonical SHA-256 hash of
+the emitted record plus a previous-hash chain, so exported history can be
+replayed and checked without re-running prompts. `--redact` replaces prompt
+bodies before hashing and emitting records.
+
+`audit verify --file` validates an exported NDJSON stream and returns an
+`audit.verify` envelope with `status: "ok"` or `status: "failed"`. Omit
+`--file` to verify the local raw `audit.ndjson` shape and timestamp ordering.
+Verification never executes prompt records.
 
 ## Adapters
 
