@@ -4,6 +4,8 @@
 use crate::{build, clippy, format, metadata, test};
 use crate::{flags, WorkspaceMember};
 use anyhow::Context;
+use sha2::{Digest, Sha256};
+use std::{fs, io::Read, path::Path};
 use xshell::{cmd, Shell};
 
 /// Perform a default build.
@@ -193,35 +195,124 @@ pub fn run(sh: &Shell, mut flags: flags::Run) -> anyhow::Result<()> {
     }
 }
 
-/// Bundle all distributable content to `target/dist`.
+/// Bundle local Open Mosaic release artifacts to `target/dist`.
 ///
-/// This includes the optimized zellij executable from the [`install`] pipeline, the man page, the
-/// `.desktop` file and the application logo.
+/// This includes the native `mosaic` control CLI, the Zellij-compatible `zellij`
+/// workspace binary, docs, schemas, smoke scripts, an archive, and a checksum.
 pub fn dist(sh: &Shell, _flags: flags::Dist) -> anyhow::Result<()> {
     let err_context = || "failed to run pipeline 'dist'";
 
-    sh.change_dir(crate::project_root());
+    let project_root = crate::project_root();
+    sh.change_dir(&project_root);
     if sh.path_exists("target/dist") {
         sh.remove_path("target/dist").with_context(err_context)?;
     }
-    sh.create_dir("target/dist")
-        .map_err(anyhow::Error::new)
-        .and_then(|_| {
-            install(
-                sh,
-                flags::Install {
-                    destination: crate::project_root().join("./target/dist/zellij"),
-                    no_web: false,
-                },
-            )
-        })
+
+    let cargo = crate::cargo().with_context(err_context)?;
+    cmd!(sh, "{cargo} build --release --bin mosaic --bin zellij").run()?;
+
+    let dist_dir = project_root.join("target/dist");
+    let package_dir = dist_dir.join("open-mosaic");
+    let bin_dir = package_dir.join("bin");
+    let doc_dir = package_dir.join("doc");
+    let schema_dir = package_dir.join("schemas");
+    let script_dir = package_dir.join("scripts");
+    fs::create_dir_all(&bin_dir).with_context(err_context)?;
+    fs::create_dir_all(&doc_dir).with_context(err_context)?;
+    fs::create_dir_all(&schema_dir).with_context(err_context)?;
+    fs::create_dir_all(&script_dir).with_context(err_context)?;
+
+    sh.copy_file("target/release/mosaic", bin_dir.join("mosaic"))
+        .and_then(|_| sh.copy_file("target/release/zellij", bin_dir.join("zellij")))
+        .and_then(|_| sh.copy_file("LICENSE.md", package_dir.join("LICENSE.md")))
+        .and_then(|_| sh.copy_file("NOTICE.md", package_dir.join("NOTICE.md")))
+        .and_then(|_| sh.copy_file("README.md", doc_dir.join("README.md")))
         .with_context(err_context)?;
 
-    sh.create_dir("target/dist/man")
-        .and_then(|_| sh.copy_file("assets/man/zellij.1", "target/dist/man/zellij.1"))
-        .and_then(|_| sh.copy_file("assets/zellij.desktop", "target/dist/zellij.desktop"))
-        .and_then(|_| sh.copy_file("assets/logo.png", "target/dist/logo.png"))
-        .with_context(err_context)
+    for doc in [
+        "docs/DISPATCH_INTEGRATION.md",
+        "docs/GETTING_STARTED.md",
+        "docs/MIGRATION.md",
+        "docs/MOSAIC_ADAPTERS.md",
+        "docs/MOSAIC_CLI.md",
+        "docs/MOSAIC_GOALS.md",
+        "docs/MOSAIC_MACHINES.md",
+        "docs/MOSAIC_SCHEMAS.md",
+        "docs/MOSAIC_WEB.md",
+        "docs/OPEN_MOSAIC.md",
+        "docs/RELEASE.md",
+        "docs/TMUX_FOR_AGENTS.md",
+        "docs/UPSTREAM_MAINTENANCE.md",
+        "docs/ZELLIJ_ARCHITECTURE_AUDIT.md",
+    ] {
+        copy_to_basename(sh, Path::new(doc), &doc_dir).with_context(err_context)?;
+    }
+    for schema in ["schemas/mosaic.control.v1.schema.json"] {
+        copy_to_basename(sh, Path::new(schema), &schema_dir).with_context(err_context)?;
+    }
+    for script in [
+        "scripts/check-upstream-hygiene.sh",
+        "scripts/mosaic-workflow-smoke.sh",
+        "scripts/mosaic-agent-workflow-smoke.sh",
+    ] {
+        copy_to_basename(sh, Path::new(script), &script_dir).with_context(err_context)?;
+    }
+
+    let host = host_triple(sh).with_context(err_context)?;
+    let archive_name = format!("open-mosaic-{host}.tar.gz");
+    let checksum_name = format!("{archive_name}.sha256sum");
+    let archive_path = dist_dir.join(&archive_name);
+    let checksum_path = dist_dir.join(&checksum_name);
+    let manifest = format!(
+        "name: open-mosaic\nhost: {host}\narchive: {archive_name}\nbinaries:\n  - mosaic\n  - zellij\n"
+    );
+    fs::write(package_dir.join("MANIFEST.txt"), manifest).with_context(err_context)?;
+
+    cmd!(sh, "tar -C target/dist -czf {archive_path} open-mosaic").run()?;
+    write_sha256sum(&archive_path, &checksum_path).with_context(err_context)?;
+    println!("Open Mosaic package: {}", archive_path.display());
+    println!("Open Mosaic checksum: {}", checksum_path.display());
+    Ok(())
+}
+
+fn copy_to_basename(sh: &Shell, source: &Path, destination_dir: &Path) -> anyhow::Result<()> {
+    let filename = source
+        .file_name()
+        .context("source path is missing a file name")?;
+    sh.copy_file(source, destination_dir.join(filename))
+        .map_err(anyhow::Error::new)
+}
+
+fn host_triple(sh: &Shell) -> anyhow::Result<String> {
+    let rustc = cmd!(sh, "rustc -vV").read()?;
+    rustc
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .map(ToOwned::to_owned)
+        .context("failed to read host triple from rustc -vV")
+}
+
+fn write_sha256sum(archive_path: &Path, checksum_path: &Path) -> anyhow::Result<()> {
+    let mut file = fs::File::open(archive_path)
+        .with_context(|| format!("failed to open {}", archive_path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let bytes = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to read {}", archive_path.display()))?;
+        if bytes == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes]);
+    }
+    let digest = hasher.finalize();
+    let archive_name = archive_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("archive path is missing a UTF-8 file name")?;
+    fs::write(checksum_path, format!("{digest:x}  {archive_name}\n"))
+        .with_context(|| format!("failed to write {}", checksum_path.display()))
 }
 
 /// Actions for the user to choose from to resolve publishing errors/conflicts.

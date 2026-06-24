@@ -39,7 +39,24 @@ runtime has a separate Mosaic entrypoint.
 
 ## Local Release Build
 
-Build both binaries locally:
+Build and stage a local Open Mosaic distribution:
+
+```sh
+cargo xtask dist
+```
+
+This creates:
+
+```text
+target/dist/open-mosaic/
+target/dist/open-mosaic-<host>.tar.gz
+target/dist/open-mosaic-<host>.tar.gz.sha256sum
+```
+
+The staged directory and archive include `bin/mosaic`, `bin/zellij`,
+`LICENSE.md`, `NOTICE.md`, user-facing docs, schemas, and smoke scripts.
+
+For a direct binary-only build:
 
 ```sh
 cargo build --release --bin mosaic --bin zellij

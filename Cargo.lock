@@ -4748,6 +4748,7 @@ dependencies = [
  "anyhow",
  "prost-build",
  "serde_json",
+ "sha2",
  "toml 0.5.10",
  "which",
  "xflags",
