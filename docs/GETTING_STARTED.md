@@ -111,6 +111,19 @@ The smoke script creates a disposable `mosaic-smoke-*` background session,
 refuses to reuse an existing session name, and closes only the session it
 created.
 
+If you have a supported agent CLI installed (`codewith`, `codex`, `claude`, or
+`opencode`), you can also run the guarded real-agent smoke:
+
+```sh
+scripts/mosaic-agent-workflow-smoke.sh
+```
+
+By default this launches a real agent pane, verifies Mosaic classified it as an
+agent, writes a marker prompt without submitting it, queues a follow-up,
+captures recent output, streams pane updates, checks audit/queue redaction, and
+then closes the disposable `mosaic-agent-smoke-*` session. It does not start a
+model turn unless `MOSAIC_AGENT_SMOKE_SUBMIT=enter` is set.
+
 ## State
 
 Mosaic stores local queue, observation, and audit records under:

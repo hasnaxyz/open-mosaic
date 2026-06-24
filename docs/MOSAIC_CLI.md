@@ -316,3 +316,16 @@ scripts/mosaic-workflow-smoke.sh
 
 Default-feature packaging and release validation still need the normal plugin
 artifact build path before publishing broader installable artifacts.
+When an agent CLI is installed locally and the operator wants to exercise a
+real agent pane instead of the deterministic shell fixture, run:
+
+```sh
+scripts/mosaic-agent-workflow-smoke.sh
+```
+
+The real-agent smoke script launches a disposable `mosaic-agent-smoke-*`
+session, verifies `mosaic_agent` metadata before prompt delivery, writes a
+no-submit prompt by default, queues a follow-up, observes/captures/subscribes
+output, checks audit/queue redaction, and closes the session. Set
+`MOSAIC_AGENT_SMOKE_SUBMIT=enter` only when an operator intentionally wants to
+submit the prompt to the agent model.

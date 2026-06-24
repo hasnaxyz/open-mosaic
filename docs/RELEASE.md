@@ -77,6 +77,17 @@ cargo package --list
 scripts/check-upstream-hygiene.sh
 ```
 
+When a maintainer has a supported local agent CLI installed, also run the
+guarded real-agent smoke before a release candidate:
+
+```sh
+scripts/mosaic-agent-workflow-smoke.sh
+```
+
+It is intentionally not a CI requirement because it depends on an operator's
+local agent installation and auth state. By default it validates no-submit
+prompt delivery and does not submit a model turn.
+
 After the workflow publishes assets, verify:
 
 - Asset names start with `open-mosaic-`.

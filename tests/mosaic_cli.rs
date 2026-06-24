@@ -24,6 +24,25 @@ fn mosaic_help_exposes_agentic_control_surface() {
 }
 
 #[test]
+fn real_agent_smoke_script_keeps_safe_defaults() {
+    let script_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("scripts")
+        .join("mosaic-agent-workflow-smoke.sh");
+    let script = fs::read_to_string(script_path).expect("real agent smoke script");
+
+    assert!(script.contains("MOSAIC_AGENT_SMOKE_SUBMIT=enter"));
+    assert!(script.contains("submit_mode=\"${MOSAIC_AGENT_SMOKE_SUBMIT:-none}\""));
+    assert!(script.contains("submit_args=(--no-submit)"));
+    assert!(script.contains("and agent.get(\"status\") == \"running\""));
+    assert!(script.contains("agent.get(\"composer_state\") != \"working\""));
+    assert!(script.contains("--dry-run prompt send"));
+    assert!(script.contains("export MOSAIC_AUDIT_REDACT=1"));
+    assert!(script.contains("sessions close \"$SESSION\" --delete"));
+    assert!(!script.contains("/home/hasna"));
+    assert!(!script.to_ascii_lowercase().contains("spark"));
+}
+
+#[test]
 fn web_link_defaults_to_read_only_watch_url() {
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .args(["web", "link", "--session", "work"])

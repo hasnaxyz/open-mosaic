@@ -109,6 +109,8 @@ done
 
 require_cargo_include scripts/check-upstream-hygiene.sh
 require_deb_doc_asset scripts/check-upstream-hygiene.sh
+require_cargo_include scripts/mosaic-agent-workflow-smoke.sh
+require_deb_doc_asset scripts/mosaic-agent-workflow-smoke.sh
 
 private_scan_paths="README.md NOTICE.md Cargo.toml docs src/bin/mosaic.rs src/bin/mosaic"
 private_patterns='(/home/hasna|Spark[0-9]*|spark[0-9]*)'
