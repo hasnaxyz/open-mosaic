@@ -54,7 +54,7 @@ xflags::xflags! {
             optional --cargo-registry registry: OsString
         }
 
-        /// Package zellij for distribution (result found in ./target/dist)
+        /// Package Open Mosaic for local distribution (result found in ./target/dist)
         cmd dist {}
 
         /// Run `cargo clippy` on all crates

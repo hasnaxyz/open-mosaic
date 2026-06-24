@@ -36,6 +36,13 @@ install -Dm755 target/release/mosaic "$HOME/.local/bin/mosaic"
 install -Dm755 target/release/zellij "$HOME/.local/bin/zellij"
 ```
 
+To create a local archive with both binaries, docs, schemas, scripts, and a
+checksum:
+
+```sh
+cargo xtask dist
+```
+
 The `mosaic sessions create` command currently launches the compatibility
 `zellij` binary. If it is not on `PATH`, set `MOSAIC_ZELLIJ_BIN=/path/to/zellij`.
 
