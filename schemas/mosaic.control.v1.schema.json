@@ -1,0 +1,470 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hasnaxyz/open-mosaic/schemas/mosaic.control.v1.schema.json",
+  "title": "Open Mosaic control API v1",
+  "description": "Versioned JSON and NDJSON envelopes emitted by the Open Mosaic control CLI.",
+  "oneOf": [
+    { "$ref": "#/$defs/receipt" },
+    { "$ref": "#/$defs/queueList" },
+    { "$ref": "#/$defs/auditList" },
+    { "$ref": "#/$defs/queuedPrompt" },
+    { "$ref": "#/$defs/observePane" },
+    { "$ref": "#/$defs/paneUpdate" },
+    { "$ref": "#/$defs/paneClosed" },
+    { "$ref": "#/$defs/dashboardSnapshot" },
+    { "$ref": "#/$defs/webLink" },
+    { "$ref": "#/$defs/adaptersList" },
+    { "$ref": "#/$defs/adaptersValidate" },
+    { "$ref": "#/$defs/machinesList" },
+    { "$ref": "#/$defs/machineDescriptor" },
+    { "$ref": "#/$defs/goalsRegistry" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "schemaVersion": {
+      "const": "mosaic.control.v1"
+    },
+    "timestampMs": {
+      "type": ["integer", "number"],
+      "minimum": 0
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session": {
+      "type": ["string", "null"]
+    },
+    "paneId": {
+      "type": ["string", "null"],
+      "description": "Stable Mosaic pane selector such as terminal_1, plugin_2, or a compatible numeric pane id."
+    },
+    "redactedString": {
+      "type": "string",
+      "description": "May be a concrete value or the literal [redacted] when a redaction flag was used."
+    },
+    "controlEnvelope": {
+      "type": "object",
+      "required": ["schema_version", "event"],
+      "properties": {
+        "schema_version": { "$ref": "#/$defs/schemaVersion" },
+        "event": { "type": "string" },
+        "timestamp_ms": { "$ref": "#/$defs/timestampMs" }
+      },
+      "additionalProperties": true
+    },
+    "receipt": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "id", "operation", "session", "pane_id", "status", "ack", "timestamp_ms", "error"],
+          "properties": {
+            "event": { "const": "receipt" },
+            "id": { "$ref": "#/$defs/id" },
+            "operation": {
+              "type": "string",
+              "description": "Operation name such as prompt.send, prompt.queue, queue.clear, session.create, pane.create, or web.link."
+            },
+            "session": { "$ref": "#/$defs/session" },
+            "pane_id": { "$ref": "#/$defs/paneId" },
+            "status": {
+              "type": "string",
+              "enum": ["accepted", "dry_run", "queued", "error"]
+            },
+            "ack": {
+              "type": "string",
+              "enum": ["server_accepted", "local_state_updated", "none"]
+            },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" },
+            "error": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "agentMetadata": {
+      "type": "object",
+      "required": ["schema_version", "kind", "confidence", "signals", "status", "composer_state", "submit_keys"],
+      "properties": {
+        "schema_version": { "const": "mosaic.agent.v1" },
+        "kind": {
+          "type": "string",
+          "enum": ["codewith", "claude_code", "opencode", "codex", "shell", "server", "log", "plugin", "unknown"]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "signals": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "status": {
+          "type": "string",
+          "enum": ["running", "exited", "held"]
+        },
+        "composer_state": {
+          "type": "string",
+          "enum": ["unknown", "working"]
+        },
+        "submit_keys": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["Enter", "Tab"]
+          }
+        },
+        "cwd": { "type": ["string", "null"] },
+        "repo": {
+          "type": ["object", "null"],
+          "properties": {
+            "path": { "type": "string" },
+            "name": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "command": { "type": ["string", "null"] },
+        "current_task": { "type": ["object", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "paneEntry": {
+      "type": "object",
+      "required": ["mosaic_agent"],
+      "properties": {
+        "id": { "type": ["integer", "number", "string"] },
+        "is_plugin": { "type": "boolean" },
+        "title": { "type": ["string", "null"] },
+        "pane_command": { "type": ["string", "null"] },
+        "pane_cwd": { "type": ["string", "null"] },
+        "mosaic_agent": { "$ref": "#/$defs/agentMetadata" }
+      },
+      "additionalProperties": true
+    },
+    "queuedPrompt": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "session", "pane_id", "timestamp_ms", "receipt", "prompt"],
+          "properties": {
+            "event": { "const": "queued_prompt" },
+            "session": { "type": "string" },
+            "pane_id": { "type": "string" },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" },
+            "receipt": { "$ref": "#/$defs/receipt" },
+            "prompt": { "$ref": "#/$defs/redactedString" }
+          }
+        }
+      ]
+    },
+    "queueList": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "session", "pane_id", "timestamp_ms", "data"],
+          "properties": {
+            "event": { "const": "queue.list" },
+            "session": { "$ref": "#/$defs/session" },
+            "pane_id": { "$ref": "#/$defs/paneId" },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" },
+            "data": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/queuedPrompt" }
+            }
+          }
+        }
+      ]
+    },
+    "auditList": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "timestamp_ms", "data"],
+          "properties": {
+            "event": { "const": "audit.list" },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" },
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "activitySummary": {
+      "type": "object",
+      "required": ["line_count_total", "line_count_returned", "non_empty_line_count", "char_count_returned", "truncated_head", "last_non_empty_line", "state", "exit_code"],
+      "properties": {
+        "line_count_total": { "type": "integer", "minimum": 0 },
+        "line_count_returned": { "type": "integer", "minimum": 0 },
+        "non_empty_line_count": { "type": "integer", "minimum": 0 },
+        "char_count_returned": { "type": "integer", "minimum": 0 },
+        "truncated_head": { "type": "boolean" },
+        "last_non_empty_line": { "type": ["string", "null"] },
+        "state": {
+          "type": "string",
+          "enum": ["empty", "active"]
+        },
+        "exit_code": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "observePane": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "id", "session", "pane_id", "source", "timestamp_ms", "scrollback", "ansi", "redacted", "lines", "activity"],
+          "properties": {
+            "event": { "const": "observe.pane" },
+            "id": { "$ref": "#/$defs/id" },
+            "session": { "type": "string" },
+            "pane_id": { "type": "string" },
+            "source": { "const": "dump_screen" },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" },
+            "scrollback": { "type": "boolean" },
+            "ansi": { "type": "boolean" },
+            "redacted": { "type": "boolean" },
+            "lines": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "activity": { "$ref": "#/$defs/activitySummary" }
+          }
+        }
+      ]
+    },
+    "paneUpdate": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "session", "pane_id", "sequence", "timestamp_ms", "is_initial", "viewport", "scrollback"],
+          "properties": {
+            "event": { "const": "pane_update" },
+            "session": { "type": "string" },
+            "pane_id": { "type": "string" },
+            "sequence": { "type": "integer", "minimum": 1 },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" },
+            "is_initial": { "type": "boolean" },
+            "viewport": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "scrollback": {
+              "type": ["array", "null"],
+              "items": { "type": "string" }
+            }
+          }
+        }
+      ]
+    },
+    "paneClosed": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "session", "pane_id", "sequence", "timestamp_ms"],
+          "properties": {
+            "event": { "const": "pane_closed" },
+            "session": { "type": "string" },
+            "pane_id": { "type": "string" },
+            "sequence": { "type": "integer", "minimum": 1 },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" }
+          }
+        }
+      ]
+    },
+    "dashboardSnapshot": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "timestamp_ms", "partial", "errors", "state_scope", "sessions", "queues", "audit", "goals", "live"],
+          "properties": {
+            "event": { "const": "dashboard.snapshot" },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" },
+            "partial": { "type": "boolean" },
+            "errors": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/errorObject" }
+            },
+            "session": { "$ref": "#/$defs/session" },
+            "state_scope": { "const": "local_user" },
+            "sessions": { "type": "array" },
+            "queues": { "type": "object", "additionalProperties": true },
+            "audit": { "type": "object", "additionalProperties": true },
+            "goals": { "type": "object", "additionalProperties": true },
+            "live": { "type": "object", "additionalProperties": true }
+          }
+        }
+      ]
+    },
+    "webLink": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "web_schema_version", "mode", "session", "url", "bookmarkable", "read_only_required", "watcher", "control_allowed", "auth", "security"],
+          "properties": {
+            "event": { "const": "web.link" },
+            "web_schema_version": { "const": "mosaic.web.v1" },
+            "mode": { "enum": ["watch", "control"] },
+            "session": { "$ref": "#/$defs/redactedString" },
+            "base_url": { "$ref": "#/$defs/redactedString" },
+            "url": { "$ref": "#/$defs/redactedString" },
+            "bookmarkable": { "type": "boolean" },
+            "read_only_required": { "type": "boolean" },
+            "watcher": { "type": "boolean" },
+            "control_allowed": { "type": "boolean" },
+            "input_forwarding": { "type": "boolean" },
+            "can_create_sessions": { "type": "boolean" },
+            "routes": { "type": "object", "additionalProperties": true },
+            "auth": { "type": "object", "additionalProperties": true },
+            "security": { "type": "object", "additionalProperties": true }
+          }
+        }
+      ]
+    },
+    "adapterDescriptor": {
+      "type": "object",
+      "required": ["id", "kind", "name", "version", "capabilities"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["agent", "project_registry", "task_system", "identity", "machine_registry", "transport", "goal_system"]
+        },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "command": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "adaptersList": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "adapter_schema_version", "data"],
+          "properties": {
+            "event": { "const": "adapters.list" },
+            "adapter_schema_version": { "const": "mosaic.adapter.v1" },
+            "data": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/adapterDescriptor" }
+            }
+          }
+        }
+      ]
+    },
+    "adaptersValidate": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "adapter_schema_version", "valid", "adapter"],
+          "properties": {
+            "event": { "const": "adapters.validate" },
+            "adapter_schema_version": { "const": "mosaic.adapter.v1" },
+            "valid": { "type": "boolean" },
+            "adapter": { "$ref": "#/$defs/adapterDescriptor" }
+          }
+        }
+      ]
+    },
+    "machineDescriptor": {
+      "type": "object",
+      "required": ["schema_version", "id", "kind", "transport"],
+      "properties": {
+        "schema_version": { "const": "mosaic.machine.v1" },
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "transport": {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {
+            "kind": { "enum": ["local", "ssh"] }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "machinesList": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "machine_schema_version", "data"],
+          "properties": {
+            "event": { "enum": ["machines.list", "machines.local", "machines.validate"] },
+            "machine_schema_version": { "const": "mosaic.machine.v1" },
+            "data": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/machineDescriptor" }
+            }
+          }
+        }
+      ]
+    },
+    "goalsRegistry": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "goals_schema_version"],
+          "properties": {
+            "event": { "enum": ["goals.list", "goals.validate", "goals.todos_plan"] },
+            "goals_schema_version": { "const": "mosaic.goals.v1" },
+            "configured": { "type": "boolean" },
+            "valid": { "type": "boolean" },
+            "data": {
+              "type": ["array", "object"],
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "errorObject": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "section": { "type": "string" },
+        "code": { "type": "string" },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "error": {
+      "allOf": [
+        { "$ref": "#/$defs/controlEnvelope" },
+        {
+          "type": "object",
+          "required": ["event", "code", "message", "timestamp_ms"],
+          "properties": {
+            "event": { "const": "error" },
+            "code": { "type": "string" },
+            "message": { "type": "string" },
+            "timestamp_ms": { "$ref": "#/$defs/timestampMs" }
+          }
+        }
+      ]
+    }
+  }
+}

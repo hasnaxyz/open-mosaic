@@ -7,6 +7,9 @@ semantics.
 
 Schema-bearing machine output uses `schema_version: "mosaic.control.v1"`.
 Unknown JSON fields are reserved for compatible additions.
+The JSON Schema contract is published in
+`schemas/mosaic.control.v1.schema.json` and documented in
+`docs/MOSAIC_SCHEMAS.md`.
 
 ## Sessions
 

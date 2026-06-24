@@ -92,6 +92,7 @@ After the workflow publishes assets, verify:
 
 - Asset names start with `open-mosaic-`.
 - Normal and no-web archives contain `mosaic` and `zellij`.
+- Source/package manifests include `schemas/mosaic.control.v1.schema.json`.
 - `.sha256sum` files hash the uploaded archive or installer artifact.
 - Windows MSI identifies itself as Open Mosaic and installs into an Open Mosaic
   folder, not an upstream Zellij folder.

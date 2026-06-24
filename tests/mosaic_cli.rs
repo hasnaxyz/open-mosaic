@@ -43,6 +43,66 @@ fn real_agent_smoke_script_keeps_safe_defaults() {
 }
 
 #[test]
+fn mosaic_control_schema_covers_public_agent_events() {
+    let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("schemas")
+        .join("mosaic.control.v1.schema.json");
+    let schema_text = fs::read_to_string(schema_path).expect("mosaic control schema");
+    let schema: Value = serde_json::from_str(&schema_text).expect("valid JSON schema");
+
+    assert_eq!(
+        schema["$id"],
+        "https://github.com/hasnaxyz/open-mosaic/schemas/mosaic.control.v1.schema.json"
+    );
+    assert_eq!(
+        schema["$defs"]["schemaVersion"]["const"],
+        "mosaic.control.v1"
+    );
+    assert_eq!(
+        schema["$defs"]["agentMetadata"]["properties"]["schema_version"]["const"],
+        "mosaic.agent.v1"
+    );
+
+    for definition in [
+        "receipt",
+        "queuedPrompt",
+        "queueList",
+        "auditList",
+        "observePane",
+        "paneUpdate",
+        "paneClosed",
+        "dashboardSnapshot",
+        "webLink",
+        "adaptersList",
+        "machinesList",
+        "goalsRegistry",
+        "error",
+    ] {
+        assert!(
+            schema["$defs"].get(definition).is_some(),
+            "missing schema definition {definition}"
+        );
+    }
+
+    let serialized = serde_json::to_string(&schema).expect("schema text");
+    for event in [
+        "prompt.send",
+        "prompt.queue",
+        "queued_prompt",
+        "queue.list",
+        "audit.list",
+        "observe.pane",
+        "pane_update",
+        "dashboard.snapshot",
+        "web.link",
+    ] {
+        assert!(serialized.contains(event), "schema should cover {event}");
+    }
+    assert!(!serialized.contains("/home/hasna"));
+    assert!(!serialized.to_ascii_lowercase().contains("spark"));
+}
+
+#[test]
 fn web_link_defaults_to_read_only_watch_url() {
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .args(["web", "link", "--session", "work"])

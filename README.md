@@ -62,6 +62,7 @@ mosaic adapters list
 Reference docs:
 
 - [Mosaic CLI](docs/MOSAIC_CLI.md)
+- [Mosaic JSON schemas](docs/MOSAIC_SCHEMAS.md)
 - [Adapter manifests](docs/MOSAIC_ADAPTERS.md)
 - [Machines and transports](docs/MOSAIC_MACHINES.md)
 - [Goals and tasks](docs/MOSAIC_GOALS.md)

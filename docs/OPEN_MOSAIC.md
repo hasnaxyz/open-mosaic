@@ -10,6 +10,7 @@ Core requirements:
 - The product must work on a normal machine without Hasna private services.
 - Hasna/open-* integrations must be optional adapters or plugins.
 - The public CLI/API must expose stable JSON or NDJSON where agents consume it.
+- Stable JSON and NDJSON contracts must be documented with versioned schemas.
 - Agent metadata must be best-effort, portable, and based on generic pane
   fields unless an optional adapter is explicitly configured.
 - Prompt delivery must support dry-run, no-submit, queued, and immediate modes.
@@ -29,11 +30,12 @@ The first native surface is the `mosaic` binary, documented in
 `docs/MOSAIC_CLI.md`. Getting started commands are in
 `docs/GETTING_STARTED.md`. Portable adapter manifests are documented in
 `docs/MOSAIC_ADAPTERS.md`. Migration notes from Zellij and tmux are in
-`docs/MIGRATION.md`, with an agent-focused tmux comparison in
-`docs/TMUX_FOR_AGENTS.md`. Optional dispatch backend guidance is in
-`docs/DISPATCH_INTEGRATION.md`. Optional machine and transport registries are
-documented in `docs/MOSAIC_MACHINES.md`. Portable goal/task registries and the
-optional external todos adapter are documented in `docs/MOSAIC_GOALS.md`.
+`docs/MIGRATION.md`, schema contracts are in `docs/MOSAIC_SCHEMAS.md`, with an
+agent-focused tmux comparison in `docs/TMUX_FOR_AGENTS.md`. Optional dispatch
+backend guidance is in `docs/DISPATCH_INTEGRATION.md`. Optional machine and
+transport registries are documented in `docs/MOSAIC_MACHINES.md`. Portable
+goal/task registries and the optional external todos adapter are documented in
+`docs/MOSAIC_GOALS.md`.
 Bookmarkable web oversight links are documented in `docs/MOSAIC_WEB.md`.
 Upstream sync and license hygiene are documented in
 `docs/UPSTREAM_MAINTENANCE.md`.

@@ -101,11 +101,19 @@ for path in \
   docs/UPSTREAM_MAINTENANCE.md \
   docs/RELEASE.md \
   docs/OPEN_MOSAIC.md \
+  docs/MOSAIC_SCHEMAS.md \
   NOTICE.md
 do
   require_cargo_include "$path"
   require_deb_doc_asset "$path"
 done
+
+require_cargo_include schemas/mosaic.control.v1.schema.json
+if grep -Fq '["schemas/*.json", "usr/share/doc/open-mosaic/schemas/", "644"]' Cargo.toml; then
+  ok "Debian metadata installs Mosaic JSON schemas"
+else
+  fail "Debian metadata does not install Mosaic JSON schemas under usr/share/doc/open-mosaic/schemas"
+fi
 
 require_cargo_include scripts/check-upstream-hygiene.sh
 require_deb_doc_asset scripts/check-upstream-hygiene.sh
