@@ -11,6 +11,7 @@ include = [
   "LICENSE.md",
   "NOTICE.md",
   "README.md",
+  "scripts/mosaic-workflow-smoke.sh",
   "docs/GETTING_STARTED.md",
   "docs/MOSAIC_ADAPTERS.md",
   "docs/MOSAIC_CLI.md",

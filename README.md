@@ -51,6 +51,7 @@ mosaic --session demo panes list
 mosaic --session demo prompt send --pane-id 1 --text "pwd" --submit enter
 mosaic --session demo observe pane --pane-id 1 --last-lines 40
 mosaic --session demo queue list
+mosaic --session demo dashboard --live --redact
 mosaic audit list --redact
 mosaic adapters list
 ```
@@ -85,6 +86,9 @@ For the CLI-only slice during development:
 ```sh
 cargo check --bin mosaic --no-default-features --features vendored_curl
 cargo test --bin mosaic --no-default-features --features vendored_curl
+cargo test --test mosaic_cli --no-default-features --features vendored_curl
+cargo build --bin mosaic --bin zellij --no-default-features --features vendored_curl
+scripts/mosaic-workflow-smoke.sh
 ```
 
 ## Upstream

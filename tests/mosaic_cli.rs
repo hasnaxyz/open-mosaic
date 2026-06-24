@@ -17,6 +17,7 @@ fn mosaic_help_exposes_agentic_control_surface() {
     assert!(stdout.contains("adapters"));
     assert!(stdout.contains("observe"));
     assert!(stdout.contains("subscribe"));
+    assert!(stdout.contains("dashboard"));
 }
 
 #[test]
@@ -778,4 +779,183 @@ fn runtime_errors_are_machine_readable_json() {
     let error: Value = serde_json::from_str(stderr.trim()).expect("error json");
     assert_eq!(error["schema_version"], "mosaic.control.v1");
     assert_eq!(error["event"], "error");
+}
+
+#[test]
+fn dashboard_json_summarizes_local_queues_with_prompt_redaction_by_default() {
+    let state_dir = tempdir().expect("state tempdir");
+    let queued = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args([
+            "--session",
+            "dashboard-session",
+            "prompt",
+            "send",
+            "--pane-id",
+            "terminal_1",
+            "--queue",
+            "--text",
+            "secret dashboard prompt",
+        ])
+        .output()
+        .expect("queue prompt");
+    assert!(queued.status.success());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args(["dashboard", "--limit", "5"])
+        .output()
+        .expect("dashboard");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let dashboard: Value = serde_json::from_str(stdout.trim()).expect("dashboard json");
+    assert_eq!(dashboard["schema_version"], "mosaic.control.v1");
+    assert_eq!(dashboard["event"], "dashboard.snapshot");
+    assert_eq!(dashboard["state_scope"], "local_user");
+    assert_eq!(dashboard["queues"]["total_pending"], 1);
+    assert_eq!(dashboard["queues"]["prompt_bodies"], "redacted");
+    assert_eq!(dashboard["queues"]["recent"][0]["prompt"], "[redacted]");
+    assert_eq!(
+        dashboard["queues"]["by_session"][0]["session"],
+        "dashboard-session"
+    );
+    assert!(!stdout.contains("secret dashboard prompt"));
+}
+
+#[test]
+fn dashboard_live_missing_session_returns_partial_snapshot() {
+    let state_dir = tempdir().expect("state tempdir");
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args([
+            "--session",
+            "missing-dashboard-live-session",
+            "dashboard",
+            "--live",
+        ])
+        .output()
+        .expect("dashboard live");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let dashboard: Value = serde_json::from_str(stdout.trim()).expect("dashboard json");
+    assert_eq!(dashboard["event"], "dashboard.snapshot");
+    assert_eq!(dashboard["partial"], true);
+    assert_eq!(dashboard["errors"][0]["section"], "live");
+    assert_eq!(dashboard["errors"][0]["code"], "session_not_found");
+    assert_eq!(dashboard["live"]["status"], "error");
+    assert_eq!(dashboard["queues"]["total_pending"], 0);
+}
+
+#[test]
+fn dashboard_prompt_bodies_require_explicit_opt_in_and_redact_wins() {
+    let state_dir = tempdir().expect("state tempdir");
+    let queued = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args([
+            "--session",
+            "dashboard-session",
+            "prompt",
+            "send",
+            "--pane-id",
+            "terminal_1",
+            "--queue",
+            "--text",
+            "show only when asked",
+        ])
+        .output()
+        .expect("queue prompt");
+    assert!(queued.status.success());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args(["dashboard", "--show-prompts"])
+        .output()
+        .expect("dashboard with prompts");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("show only when asked"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args(["dashboard", "--show-prompts", "--redact"])
+        .output()
+        .expect("redacted dashboard");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("show only when asked"));
+    let dashboard: Value = serde_json::from_str(stdout.trim()).expect("dashboard json");
+    assert_eq!(dashboard["queues"]["prompt_bodies"], "redacted");
+}
+
+#[test]
+fn dashboard_text_is_compact_and_redacted() {
+    let state_dir = tempdir().expect("state tempdir");
+    let queued = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args([
+            "--session",
+            "dashboard-session",
+            "prompt",
+            "send",
+            "--pane-id",
+            "terminal_1",
+            "--queue",
+            "--text",
+            "text dashboard secret",
+        ])
+        .output()
+        .expect("queue prompt");
+    assert!(queued.status.success());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args(["dashboard", "--format", "text"])
+        .output()
+        .expect("dashboard text");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Open Mosaic Dashboard"));
+    assert!(stdout.contains("Queues: 1 pending (redacted)"));
+    assert!(stdout.contains("Live: not_requested"));
+    assert!(stdout.contains("Agent Metadata: 0 panes"));
+    assert!(!stdout.contains("text dashboard secret"));
+}
+
+#[test]
+fn dashboard_text_sanitizes_control_sequences_from_state() {
+    let state_dir = tempdir().expect("state tempdir");
+    let unsafe_session = "bad\n\x1b]0;pwned\x07";
+    let queued = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args([
+            "--session",
+            unsafe_session,
+            "prompt",
+            "send",
+            "--pane-id",
+            "terminal_1",
+            "--queue",
+            "--text",
+            "safe text output",
+        ])
+        .output()
+        .expect("queue prompt");
+    assert!(queued.status.success());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args(["dashboard", "--format", "text"])
+        .output()
+        .expect("dashboard text");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains('\x1b'));
+    assert!(!stdout.contains('\x07'));
+    assert!(!stdout.contains("bad\n"));
+    assert!(stdout.contains("bad??]0;pwned?"));
 }

@@ -176,6 +176,41 @@ contents.
 `is_initial`, `viewport`, and optional `scrollback`. Raw mode is explicitly
 human-oriented and can contain pane-controlled terminal text.
 
+## Dashboard
+
+```sh
+mosaic dashboard
+mosaic dashboard --format text
+mosaic --session work dashboard
+mosaic --session work dashboard --live --redact
+```
+
+`dashboard` returns a `dashboard.snapshot` envelope that combines local Mosaic
+state into one compact view for agents, scripts, and terminal dashboard panes.
+It does not require private services. Without `--live`, it only reads local
+user state and the session list: pending queues, recent audit records, and
+running session names. With `--live`, it also asks the target Mosaic/Zellij
+session for panes and tabs, enriches panes with `mosaic_agent` metadata, and
+summarizes agent kinds without returning full raw pane dumps.
+
+Queued prompt bodies are redacted by default in dashboard JSON and text output.
+Pass `--show-prompts` only when the caller is allowed to view queued prompt
+content. `--redact` forces prompt-body redaction and redacts live pane titles,
+current task text, local paths, and command details from live agent summaries.
+When `--live` cannot capture panes or tabs, the command still returns the local
+queue/audit/session snapshot with `partial: true`, an `errors` array, and
+`live.status: "error"`. The text format is intended for a compact terminal pane
+and sanitizes control characters from dynamic labels:
+
+```text
+Open Mosaic Dashboard
+Sessions: 1 running
+Queues: 2 pending (redacted)
+Audit: 6 records
+Live: not_requested
+Agent Metadata: 0 panes
+```
+
 Runtime errors are emitted to stderr as JSON:
 
 ```json
@@ -199,6 +234,8 @@ cargo fmt --check
 cargo check --bin mosaic --no-default-features --features vendored_curl
 cargo test --bin mosaic --no-default-features --features vendored_curl
 cargo test --test mosaic_cli --no-default-features --features vendored_curl
+cargo build --bin mosaic --bin zellij --no-default-features --features vendored_curl
+scripts/mosaic-workflow-smoke.sh
 ```
 
 Default-feature packaging and release validation still need the normal plugin

@@ -1,6 +1,7 @@
 use clap::{ArgEnum, Parser, Subcommand};
 use serde_json::{json, Value};
 use std::{
+    collections::BTreeMap,
     env,
     fs::{self, OpenOptions},
     io::{self, BufRead, BufReader, Write},
@@ -106,6 +107,8 @@ enum MosaicCommand {
     Capture(CaptureArgs),
     /// Subscribe to pane output.
     Subscribe(SubscribeArgs),
+    /// Render an agent workspace dashboard snapshot.
+    Dashboard(DashboardArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -327,6 +330,25 @@ struct SubscribeArgs {
     ansi: bool,
 }
 
+#[derive(Parser, Debug)]
+struct DashboardArgs {
+    /// Output a stable JSON snapshot or compact terminal text.
+    #[clap(long, arg_enum, default_value = "json")]
+    format: DashboardFormat,
+    /// Include live panes/tabs for the target session. Requires an active or explicit session.
+    #[clap(long)]
+    live: bool,
+    /// Maximum recent queue and audit records to include.
+    #[clap(long, default_value = "10")]
+    limit: usize,
+    /// Redact local paths, command details, and prompt bodies.
+    #[clap(long)]
+    redact: bool,
+    /// Include queued prompt bodies. Prompts are redacted by default.
+    #[clap(long)]
+    show_prompts: bool,
+}
+
 #[derive(Clone, Debug, ArgEnum)]
 enum SubmitKey {
     Enter,
@@ -338,6 +360,12 @@ enum SubmitKey {
 enum StreamFormat {
     Raw,
     Ndjson,
+}
+
+#[derive(Clone, Debug, ArgEnum)]
+enum DashboardFormat {
+    Json,
+    Text,
 }
 
 #[derive(Debug)]
@@ -521,6 +549,7 @@ fn run(cli: MosaicCli) -> Result<u8, MosaicError> {
             let session = resolve_session(cli.session)?;
             run_subscribe(&session, args)
         },
+        MosaicCommand::Dashboard(args) => run_dashboard(cli.session, args),
     }
 }
 
@@ -700,20 +729,466 @@ fn run_audit(command: AuditCommand) -> Result<u8, MosaicError> {
     }
 }
 
-fn run_sessions(command: SessionCommand, dry_run: bool) -> Result<u8, MosaicError> {
-    match command {
-        SessionCommand::List => {
-            let sessions = get_sessions()
-                .map_err(|e| MosaicError::new("sessions_list_failed", format!("{e:?}")))?
-                .into_iter()
-                .map(|(name, age)| {
+fn run_dashboard(session: Option<String>, args: DashboardArgs) -> Result<u8, MosaicError> {
+    let format = args.format.clone();
+    let snapshot = build_dashboard_snapshot(session, args)?;
+    match format {
+        DashboardFormat::Json => print_value(snapshot)?,
+        DashboardFormat::Text => print_dashboard_text(&snapshot)?,
+    }
+    Ok(0)
+}
+
+fn build_dashboard_snapshot(
+    requested_session: Option<String>,
+    args: DashboardArgs,
+) -> Result<Value, MosaicError> {
+    let sessions = list_sessions_values()?;
+    let mut queue_records = read_queue_records(requested_session.as_deref(), None)?;
+    sort_values_by_timestamp(&mut queue_records);
+    let show_prompt_bodies = args.show_prompts && !args.redact;
+    let queue_summary = summarize_queue_records(&queue_records, args.limit, show_prompt_bodies);
+
+    let mut audit_records = read_ndjson_file(&audit_path())?;
+    if let Some(session) = requested_session.as_deref() {
+        audit_records.retain(|record| record_matches_session(record, session));
+    }
+    sort_values_by_timestamp(&mut audit_records);
+    let mut audit_summary = summarize_audit_records(&audit_records, args.limit);
+    if !show_prompt_bodies {
+        redact_prompt_value(&mut audit_summary);
+    }
+
+    let (live, partial, errors) = if args.live {
+        match resolve_session(requested_session.clone())
+            .and_then(|session| build_live_dashboard_snapshot(&session, args.redact))
+        {
+            Ok(live) => (live, false, Vec::new()),
+            Err(error) => {
+                let error = dashboard_section_error("live", &error);
+                (
                     json!({
-                        "name": name,
-                        "age_seconds": age.as_secs(),
-                        "status": "running"
+                        "requested": true,
+                        "session": requested_session.clone(),
+                        "status": "error",
+                        "error": error.clone(),
+                        "agents": {
+                            "total": 0,
+                            "by_kind": [],
+                            "panes": []
+                        }
+                    }),
+                    true,
+                    vec![error],
+                )
+            },
+        }
+    } else {
+        (
+            json!({
+                "requested": false,
+                "session": requested_session.clone(),
+                "status": "not_requested",
+                "agents": {
+                    "total": 0,
+                    "by_kind": [],
+                    "panes": []
+                }
+            }),
+            false,
+            Vec::new(),
+        )
+    };
+
+    Ok(json!({
+        "schema_version": SCHEMA_VERSION,
+        "event": "dashboard.snapshot",
+        "timestamp_ms": now_millis(),
+        "partial": partial,
+        "errors": errors,
+        "session": requested_session,
+        "state_scope": "local_user",
+        "sessions": sessions,
+        "queues": queue_summary,
+        "audit": audit_summary,
+        "live": live,
+    }))
+}
+
+fn dashboard_section_error(section: &'static str, error: &MosaicError) -> Value {
+    json!({
+        "section": section,
+        "code": error.code,
+        "message": error.message,
+    })
+}
+
+fn list_sessions_values() -> Result<Vec<Value>, MosaicError> {
+    Ok(get_sessions()
+        .map_err(|e| MosaicError::new("sessions_list_failed", format!("{e:?}")))?
+        .into_iter()
+        .map(|(name, age)| {
+            json!({
+                "name": name,
+                "age_seconds": age.as_secs(),
+                "status": "running",
+            })
+        })
+        .collect())
+}
+
+fn build_live_dashboard_snapshot(session: &str, redact: bool) -> Result<Value, MosaicError> {
+    let panes_output = dispatch_cli_action_capture(
+        session,
+        CliAction::ListPanes {
+            tab: true,
+            command: true,
+            state: true,
+            geometry: true,
+            all: true,
+            json: true,
+        },
+    )?;
+    let panes = mosaic_agent::enrich_panes_data(parse_server_json(panes_output.lines)?);
+    let tabs_output = dispatch_cli_action_capture(
+        session,
+        CliAction::ListTabs {
+            state: true,
+            dimensions: true,
+            panes: true,
+            layout: true,
+            all: true,
+            json: true,
+        },
+    )?;
+    let tabs = parse_server_json(tabs_output.lines)?;
+    let agents = summarize_agent_panes(&panes, redact);
+    Ok(json!({
+        "requested": true,
+        "session": session,
+        "status": "captured",
+        "pane_count": value_array_len(&panes),
+        "tab_count": value_array_len(&tabs),
+        "agents": agents,
+    }))
+}
+
+fn summarize_queue_records(records: &[Value], limit: usize, show_prompts: bool) -> Value {
+    let mut by_session: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    for record in records {
+        let session = value_string_field(record, "session").unwrap_or_else(|| "unknown".to_owned());
+        let pane_id = value_string_field(record, "pane_id").unwrap_or_else(|| "unknown".to_owned());
+        *by_session
+            .entry(session)
+            .or_default()
+            .entry(pane_id)
+            .or_default() += 1;
+    }
+    let by_session = by_session
+        .into_iter()
+        .map(|(session, panes)| {
+            let by_pane = panes
+                .into_iter()
+                .map(|(pane_id, pending)| {
+                    json!({
+                        "pane_id": pane_id,
+                        "pending": pending,
                     })
                 })
                 .collect::<Vec<_>>();
+            let pending = by_pane
+                .iter()
+                .filter_map(|pane| pane.get("pending").and_then(Value::as_u64))
+                .sum::<u64>();
+            json!({
+                "session": session,
+                "pending": pending,
+                "by_pane": by_pane,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut recent = last_n_values(records.to_vec(), Some(limit));
+    if !show_prompts {
+        redact_prompts(&mut recent);
+    }
+    json!({
+        "total_pending": records.len(),
+        "by_session": by_session,
+        "recent": recent,
+        "prompt_bodies": if show_prompts { "included" } else { "redacted" },
+    })
+}
+
+fn summarize_audit_records(records: &[Value], limit: usize) -> Value {
+    let mut by_operation: BTreeMap<String, usize> = BTreeMap::new();
+    for record in records {
+        let operation = value_string_field(record, "operation")
+            .or_else(|| value_string_field(record, "event"))
+            .unwrap_or_else(|| "unknown".to_owned());
+        *by_operation.entry(operation).or_default() += 1;
+    }
+    let by_operation = by_operation
+        .into_iter()
+        .map(|(operation, count)| {
+            json!({
+                "operation": operation,
+                "count": count,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "total_records": records.len(),
+        "by_operation": by_operation,
+        "recent": last_n_values(records.to_vec(), Some(limit)),
+    })
+}
+
+fn summarize_agent_panes(panes: &Value, redact: bool) -> Value {
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    let mut summaries = Vec::new();
+    if let Some(panes) = panes.as_array() {
+        for pane in panes {
+            let agent = pane.get("mosaic_agent").unwrap_or(&Value::Null);
+            let kind = value_string_field(agent, "kind").unwrap_or_else(|| "unknown".to_owned());
+            *by_kind.entry(kind.clone()).or_default() += 1;
+            summaries.push(summarize_agent_pane(pane, agent, &kind, redact));
+        }
+    }
+    let by_kind = by_kind
+        .into_iter()
+        .map(|(kind, count)| json!({ "kind": kind, "count": count }))
+        .collect::<Vec<_>>();
+    json!({
+        "total": summaries.len(),
+        "by_kind": by_kind,
+        "panes": summaries,
+    })
+}
+
+fn summarize_agent_pane(pane: &Value, agent: &Value, kind: &str, redact: bool) -> Value {
+    let cwd = value_string_field(agent, "cwd").map(|cwd| redact_string(cwd, redact));
+    let command =
+        value_string_field(agent, "command").map(|command| redact_string(command, redact));
+    let title = value_string_field(pane, "title")
+        .or_else(|| value_string_field(pane, "pane_title"))
+        .map(|title| redact_string(title, redact));
+    let current_task = agent
+        .get("current_task")
+        .and_then(Value::as_str)
+        .map(|current_task| redact_string(current_task.to_owned(), redact));
+    let repo = match agent.get("repo") {
+        Some(Value::Object(repo)) => json!({
+            "name": repo.get("name").cloned().unwrap_or(Value::Null),
+            "path": repo
+                .get("path")
+                .and_then(Value::as_str)
+                .map(|path| redact_string(path.to_owned(), redact)),
+        }),
+        _ => Value::Null,
+    };
+    json!({
+        "pane_id": dashboard_pane_id(pane),
+        "title": title,
+        "kind": kind,
+        "confidence": agent.get("confidence").cloned().unwrap_or(Value::Null),
+        "status": value_string_field(agent, "status"),
+        "composer_state": value_string_field(agent, "composer_state"),
+        "submit_keys": agent.get("submit_keys").cloned().unwrap_or_else(|| json!([])),
+        "cwd": cwd,
+        "repo": repo,
+        "command": command,
+        "current_task": current_task,
+    })
+}
+
+fn dashboard_pane_id(pane: &Value) -> Value {
+    pane.get("pane_id")
+        .cloned()
+        .or_else(|| pane.get("id").cloned())
+        .unwrap_or(Value::Null)
+}
+
+fn value_array_len(value: &Value) -> usize {
+    value.as_array().map(Vec::len).unwrap_or(0)
+}
+
+fn record_matches_session(record: &Value, session: &str) -> bool {
+    value_string_field(record, "session").as_deref() == Some(session)
+        || record
+            .get("receipt")
+            .and_then(|receipt| value_string_field(receipt, "session"))
+            .as_deref()
+            == Some(session)
+}
+
+fn value_string_field(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn redact_string(value: String, redact: bool) -> String {
+    if redact {
+        "[redacted]".to_owned()
+    } else {
+        value
+    }
+}
+
+fn print_dashboard_text(snapshot: &Value) -> Result<(), MosaicError> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    map_stdout_write_result(write_dashboard_text(&mut stdout, snapshot))
+}
+
+fn write_dashboard_text(writer: &mut dyn Write, snapshot: &Value) -> io::Result<()> {
+    writeln!(writer, "Open Mosaic Dashboard")?;
+    writeln!(
+        writer,
+        "Sessions: {} running",
+        snapshot
+            .get("sessions")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0)
+    )?;
+    if snapshot.get("partial").and_then(Value::as_bool) == Some(true) {
+        writeln!(writer, "Partial: true")?;
+        for error in snapshot
+            .get("errors")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            writeln!(
+                writer,
+                "  {} error: {}",
+                dashboard_text_cell(
+                    error
+                        .get("section")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                ),
+                dashboard_text_cell(
+                    error
+                        .get("code")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                )
+            )?;
+        }
+    }
+    if let Some(session) = snapshot.get("session").and_then(Value::as_str) {
+        writeln!(writer, "Filter: session {}", dashboard_text_cell(session))?;
+    }
+    let queues = &snapshot["queues"];
+    writeln!(
+        writer,
+        "Queues: {} pending ({})",
+        queues
+            .get("total_pending")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        queues
+            .get("prompt_bodies")
+            .and_then(Value::as_str)
+            .unwrap_or("redacted")
+    )?;
+    for session in queues
+        .get("by_session")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        writeln!(
+            writer,
+            "  {}: {} pending",
+            dashboard_text_cell(
+                session
+                    .get("session")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+            ),
+            session.get("pending").and_then(Value::as_u64).unwrap_or(0)
+        )?;
+    }
+    let audit = &snapshot["audit"];
+    writeln!(
+        writer,
+        "Audit: {} records",
+        audit
+            .get("total_records")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    )?;
+    let live = &snapshot["live"];
+    writeln!(
+        writer,
+        "Live: {}",
+        dashboard_text_cell(
+            live.get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        )
+    )?;
+    if live.get("requested").and_then(Value::as_bool) == Some(true) {
+        writeln!(
+            writer,
+            "Panes: {}  Tabs: {}",
+            live.get("pane_count").and_then(Value::as_u64).unwrap_or(0),
+            live.get("tab_count").and_then(Value::as_u64).unwrap_or(0)
+        )?;
+    }
+    let agents = &live["agents"];
+    writeln!(
+        writer,
+        "Agent Metadata: {} panes",
+        agents.get("total").and_then(Value::as_u64).unwrap_or(0)
+    )?;
+    for kind in agents
+        .get("by_kind")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        writeln!(
+            writer,
+            "  {}: {}",
+            dashboard_text_cell(
+                kind.get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+            ),
+            kind.get("count").and_then(Value::as_u64).unwrap_or(0)
+        )?;
+    }
+    writer.flush()
+}
+
+fn dashboard_text_cell(value: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    let mut sanitized = String::new();
+    let mut count = 0;
+    for character in value.chars() {
+        if count >= MAX_CHARS {
+            sanitized.push_str("...");
+            break;
+        }
+        if character.is_control() {
+            sanitized.push('?');
+        } else {
+            sanitized.push(character);
+        }
+        count += 1;
+    }
+    sanitized
+}
+
+fn run_sessions(command: SessionCommand, dry_run: bool) -> Result<u8, MosaicError> {
+    match command {
+        SessionCommand::List => {
+            let sessions = list_sessions_values()?;
             print_value(json!({
                 "schema_version": SCHEMA_VERSION,
                 "event": "sessions.list",
@@ -1067,6 +1542,51 @@ mod observation_tests {
         assert_eq!(observation.audit_record["lines"], Value::Null);
         let audit_json = serde_json::to_string(&observation.audit_record).expect("audit json");
         assert!(!audit_json.contains("secret"));
+    }
+}
+
+#[cfg(test)]
+mod dashboard_tests {
+    use super::*;
+
+    #[test]
+    fn live_agent_redaction_hides_sensitive_summary_fields() {
+        let summary = summarize_agent_panes(
+            &json!([
+                {
+                    "id": 7,
+                    "is_plugin": false,
+                    "title": "working in /secret/repo",
+                    "mosaic_agent": {
+                        "kind": "codewith",
+                        "confidence": 0.95,
+                        "status": "running",
+                        "composer_state": "working",
+                        "submit_keys": ["Tab", "Enter"],
+                        "cwd": "/secret/repo",
+                        "repo": {
+                            "path": "/secret/repo",
+                            "name": "repo"
+                        },
+                        "command": "codewith --token secret",
+                        "current_task": "ship private task"
+                    }
+                }
+            ]),
+            true,
+        );
+
+        let pane = &summary["panes"][0];
+        assert_eq!(pane["title"], "[redacted]");
+        assert_eq!(pane["cwd"], "[redacted]");
+        assert_eq!(pane["repo"]["path"], "[redacted]");
+        assert_eq!(pane["command"], "[redacted]");
+        assert_eq!(pane["current_task"], "[redacted]");
+        assert_eq!(pane["repo"]["name"], "repo");
+        let serialized = serde_json::to_string(&summary).expect("summary json");
+        assert!(!serialized.contains("/secret"));
+        assert!(!serialized.contains("private task"));
+        assert!(!serialized.contains("secret"));
     }
 }
 
@@ -1451,8 +1971,15 @@ fn error_event(error: &MosaicError) -> Value {
 fn print_value(value: Value) -> Result<(), MosaicError> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
-    write_json_line(&mut stdout, value)
-        .map_err(|e| MosaicError::new("stdout_write_failed", e.to_string()))
+    map_stdout_write_result(write_json_line(&mut stdout, value))
+}
+
+fn map_stdout_write_result(result: io::Result<()>) -> Result<(), MosaicError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(MosaicError::new("stdout_write_failed", error.to_string())),
+    }
 }
 
 fn write_json_line(writer: &mut dyn Write, value: Value) -> io::Result<()> {

@@ -79,6 +79,28 @@ Inspect audit records:
 mosaic audit list --redact
 ```
 
+Render a compact local dashboard:
+
+```sh
+mosaic dashboard --format text
+mosaic --session demo dashboard --live --redact
+```
+
+The dashboard reads local queues and audit records without private services.
+Queued prompt bodies are redacted by default; use `--show-prompts` only when
+the caller is allowed to inspect queued prompt content.
+
+To run the same flow against a disposable local session:
+
+```sh
+cargo build --bin mosaic --bin zellij --no-default-features --features vendored_curl
+scripts/mosaic-workflow-smoke.sh
+```
+
+The smoke script creates a disposable `mosaic-smoke-*` background session,
+refuses to reuse an existing session name, and closes only the session it
+created.
+
 ## State
 
 Mosaic stores local queue, observation, and audit records under:
