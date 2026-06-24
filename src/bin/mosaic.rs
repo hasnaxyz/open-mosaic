@@ -24,6 +24,9 @@ use zellij_utils::{
     sessions::{get_active_session, get_sessions, ActiveSession},
 };
 
+#[path = "mosaic/agent.rs"]
+mod mosaic_agent;
+
 const SCHEMA_VERSION: &str = "mosaic.control.v1";
 
 #[derive(Parser, Debug)]
@@ -268,7 +271,11 @@ fn run(cli: MosaicCli) -> Result<u8, MosaicError> {
                             json: true,
                         },
                     )?;
-                    print_envelope("panes.list", &session, parse_server_json(output.lines)?)?;
+                    print_envelope(
+                        "panes.list",
+                        &session,
+                        mosaic_agent::enrich_panes_data(parse_server_json(output.lines)?),
+                    )?;
                     Ok(output.exit_code)
                 },
             }

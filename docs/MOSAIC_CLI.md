@@ -31,7 +31,47 @@ mosaic --session work tab create --name build -- cargo build
 ```
 
 `panes list` and `tabs list` return a Mosaic envelope whose `data` field holds
-the server-provided pane or tab array.
+the server-provided pane or tab array. `panes list --all` asks the
+Zellij-derived server for command and cwd details where available.
+
+`panes list` enriches each pane with a `mosaic_agent` object. The classifier is
+best-effort and portable: it uses only generic pane fields such as title,
+command, cwd, plugin status, and exit/held state. It does not require Hasna
+services or private registries.
+
+```json
+{
+  "id": 1,
+  "is_plugin": false,
+  "title": "working: Build Open Mosaic",
+  "pane_command": "node /home/user/.bun/bin/codewith --no-alt-screen",
+  "pane_cwd": "/work/open-mosaic",
+  "mosaic_agent": {
+    "schema_version": "mosaic.agent.v1",
+    "kind": "codewith",
+    "confidence": 0.95,
+    "signals": ["command:codewith"],
+    "status": "running",
+    "composer_state": "unknown",
+    "submit_keys": ["Tab", "Enter"],
+    "cwd": "/work/open-mosaic",
+    "repo": {
+      "path": "/work/open-mosaic",
+      "name": "open-mosaic"
+    },
+    "command": "node /home/user/.bun/bin/codewith --no-alt-screen",
+    "current_task": null
+  }
+}
+```
+
+Known `mosaic_agent.kind` values are `codewith`, `claude_code`, `opencode`,
+`codex`, `shell`, `server`, `log`, `plugin`, and `unknown`. Consumers must
+treat low-confidence and unknown values as advisory metadata, not as permission
+to force prompt delivery. `repo.path` is local observer metadata and can contain
+an absolute path from the machine that produced the observation. `submit_keys`
+are hints for adapters, not a promise that prompt submission is safe for a
+specific pane.
 
 ## Prompt Delivery
 
@@ -102,6 +142,7 @@ surface without those plugin artifacts with:
 ```sh
 cargo fmt --check
 cargo check --bin mosaic --no-default-features --features vendored_curl
+cargo test --bin mosaic --no-default-features --features vendored_curl
 cargo test --test mosaic_cli --no-default-features --features vendored_curl
 ```
 
