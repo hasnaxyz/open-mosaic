@@ -1,117 +1,99 @@
-<h1 align="center">
-  <br>
-  <img src="https://raw.githubusercontent.com/zellij-org/zellij/main/assets/logo.png" alt="logo" width="200">
-  <br>
-  Zellij
-  <br>
-  <br>
-</h1>
+# Open Mosaic
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/zellij-org/zellij/main/assets/demo.gif" alt="demo">
-</p>
-<h4 align="center">
-  [<a href="https://zellij.dev/documentation/installation">Installation</a>]
-  [<a href="https://zellij.dev/screencasts/">Screencasts & Tutorials</a>]
-  [<a href="https://zellij.dev/documentation/configuration">Configuration</a>]
-  [<a href="https://zellij.dev/documentation/layouts">Layouts</a>]
-  [<a href="https://zellij.dev/documentation/faq">FAQ</a>]
-</h4>
-<p align="center">
-  <a href="https://discord.gg/CrUAFH3"><img alt="Discord Chat" src="https://img.shields.io/discord/771367133715628073?color=5865F2&label=discord&style=flat-square"></a>
-  <a href="https://matrix.to/#/#zellij_general:matrix.org"><img alt="Matrix Chat" src="https://img.shields.io/matrix/zellij_general:matrix.org?color=1d7e64&label=matrix%20chat&style=flat-square&logo=matrix"></a>
-  <a href="https://zellij.dev/documentation/"><img alt="Zellij documentation" src="https://img.shields.io/badge/zellij-documentation-fc0060?style=flat-square"></a>
-</p>
+Open Mosaic is an OSS-first agentic terminal workspace forked from
+[Zellij](https://github.com/zellij-org/zellij). It keeps Zellij's terminal
+multiplexer foundation and adds native Mosaic control APIs for agent workflows:
+structured session/pane discovery, prompt delivery receipts, prompt queues,
+agent metadata, pane observation, audit records, and portable adapter manifests.
 
-<br>
-    <p align="center">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/bc5daac4-140a-4b83-8729-71c944ee1100">
-      <img src="https://github.com/user-attachments/assets/55156624-a71a-46b5-939e-f562e3b2dd7f" alt="Sponsored by ">
-    </picture>
-    &nbsp;
-    &nbsp;
-    <a href="https://www.gresearch.com/">
-        <picture>
-          <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/d609936a-abf8-4406-8cfc-889f76a09d74">
-          <img src="https://github.com/user-attachments/assets/742ae902-fe9d-41c6-baf2-4bc143061da3" alt="gresearch logo">
-        </picture>
-    </a>
-</p>
+Open Mosaic is intended to work on normal developer machines without private
+Hasna infrastructure. Optional Hasna or open-* integrations must live behind
+adapters or plugins.
 
-# What is this?
+## Status
 
-[Zellij](#origin-of-the-name) is a workspace aimed at developers, ops-oriented people and anyone who loves the terminal. Similar programs are sometimes called "Terminal Multiplexers".
+This repository is a derivative work in active development. The current public
+surface is the `mosaic` CLI plus the Zellij-compatible `zellij` terminal
+workspace binary. Internal crate, module, plugin, socket, and compatibility
+binary names still use Zellij-derived names where that keeps upstream sync and
+existing behavior stable.
 
-Zellij is designed around the philosophy that one must not sacrifice simplicity for power, taking pride in its great experience out of the box as well as the advanced features it places at its users' fingertips.
+## Install From Source
 
-Zellij is geared toward beginner and power users alike - allowing deep customizability, personal automation through [layouts](https://zellij.dev/documentation/layouts.html), true multiplayer collaboration, unique UX features such as floating and stacked panes, and a [plugin system](https://zellij.dev/documentation/plugins.html) allowing one to create plugins in any language that compiles to WebAssembly.
+For the agent-facing CLI:
 
-Zellij includes a built-in [web-client](https://zellij.dev/tutorials/web-client/), making a terminal optional.
-
-You can get started by [installing](https://zellij.dev/documentation/installation.html) Zellij and checking out the [Screencasts & Tutorials](https://zellij.dev/screencasts/).
-
-For more details about our future plans, read about upcoming features in our [roadmap](#roadmap).
-
-## How do I install it?
-
-The easiest way to install Zellij is through a [package for your OS](./docs/THIRD_PARTY_INSTALL.md).
-
-If one is not available for your OS, you could download a prebuilt binary from the [latest release](https://github.com/zellij-org/zellij/releases/latest) and place it in your `$PATH`. If you'd like, we could [automatically choose one for you](#try-zellij-without-installing).
-
-You can also install (compile) with `cargo`:
-
-```
-cargo install --locked zellij
+```sh
+cargo build --release --bin mosaic --no-default-features --features vendored_curl
+install -Dm755 target/release/mosaic "$HOME/.local/bin/mosaic"
 ```
 
-#### Try Zellij without installing
+For the full local workspace, build both binaries:
 
-bash/zsh:
-```bash
-bash <(curl -L https://zellij.dev/launch)
-```
-fish/xonsh:
-```bash
-bash -c 'bash <(curl -L https://zellij.dev/launch)'
+```sh
+cargo build --release --bin mosaic --bin zellij
+install -Dm755 target/release/mosaic "$HOME/.local/bin/mosaic"
+install -Dm755 target/release/zellij "$HOME/.local/bin/zellij"
 ```
 
-#### Installing from `main`
-Installing Zellij from the `main` branch is not recommended. This branch represents pre-release code, is constantly being worked on and may contain broken or unusable features. In addition, using it may corrupt the cache for future versions, forcing users to clear it before they can use the officially released version.
+The `mosaic sessions create` command currently launches the compatibility
+`zellij` binary. If it is not on `PATH`, set `MOSAIC_ZELLIJ_BIN=/path/to/zellij`.
 
-That being said - no-one will stop you from using it (and bug reports involving new features are greatly appreciated), but please consider using the latest release instead as detailed at the top of this section.
+See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for a first workflow.
 
-## How do I start a development environment?
+## Native Mosaic CLI
 
-* Clone the project
-* In the project folder, for debug builds run: `cargo xtask run`
-* To run all tests: `cargo xtask test`
+The `mosaic` CLI emits versioned JSON for automation:
 
-For more build commands, see [CONTRIBUTING.md](CONTRIBUTING.md).
+```sh
+mosaic sessions list
+mosaic sessions create demo
+mosaic --session demo panes list
+mosaic --session demo prompt send --pane-id 1 --text "pwd" --submit enter
+mosaic --session demo observe pane --pane-id 1 --last-lines 40
+mosaic --session demo queue list
+mosaic audit list --redact
+mosaic adapters list
+```
 
-## Configuration
-For configuring Zellij, please see the [Configuration Documentation](https://zellij.dev/documentation/configuration.html).
+Reference docs:
 
-## About issues in this repository
-Issues in this repository, whether open or closed, do not necessarily indicate a problem or a bug in the software. They only indicate that the reporter wanted to communicate their experiences or thoughts to the maintainers. The Zellij maintainers do their best to go over and reply to all issue reports, but unfortunately cannot promise these will always be dealt with or even read. Your understanding is appreciated.
+- [Mosaic CLI](docs/MOSAIC_CLI.md)
+- [Adapter manifests](docs/MOSAIC_ADAPTERS.md)
+- [Open Mosaic product contract](docs/OPEN_MOSAIC.md)
 
-## Roadmap
-Presented here is the project roadmap, divided into three main sections.
+## How Open Mosaic Differs From Zellij
 
-These are issues that are either being actively worked on or are planned for the near future.
+Zellij is the upstream terminal workspace foundation. Open Mosaic preserves that
+foundation while adding agent-native control and observability surfaces. These
+Mosaic additions are fork-specific unless they are separately accepted upstream
+by Zellij.
 
-***If you'll click on the image, you'll be led to an SVG version of it on the website where you can directly click on every issue***
+The fork does not claim to be upstream Zellij, and it preserves Zellij's MIT
+license notices and attribution. See [NOTICE.md](NOTICE.md) and
+[LICENSE.md](LICENSE.md).
 
-[![roadmap](https://github.com/user-attachments/assets/bb55d213-4a68-4c84-ae72-7db5c9bf94fb)](https://zellij.dev/roadmap)
+## Development
 
-## Origin of the Name
-[From Wikipedia, the free encyclopedia](https://en.wikipedia.org/wiki/Zellij)
+```sh
+cargo xtask build
+cargo xtask test
+cargo test --test mosaic_cli --no-default-features --features vendored_curl
+```
 
-Zellij (Arabic: الزليج, romanized: zillīj; also spelled zillij or zellige) is a style of mosaic tilework made from individually hand-chiseled tile pieces. The pieces were typically of different colours and fitted together to form various patterns on the basis of tessellations, most notably elaborate Islamic geometric motifs such as radiating star patterns composed of various polygons. This form of Islamic art is one of the main characteristics of architecture in the western Islamic world. It is found in the architecture of Morocco, the architecture of Algeria, early Islamic sites in Tunisia, and in the historic monuments of al-Andalus (in the Iberian Peninsula).
+For the CLI-only slice during development:
+
+```sh
+cargo check --bin mosaic --no-default-features --features vendored_curl
+cargo test --bin mosaic --no-default-features --features vendored_curl
+```
+
+## Upstream
+
+The upstream project is [zellij-org/zellij](https://github.com/zellij-org/zellij).
+Keep upstream attribution and MIT notices intact when syncing or modifying the
+fork. Do not push to the upstream remote from this repository.
 
 ## License
 
-MIT
-
-## Sponsored by
-<a href="https://terminaltrove.com/"><img src="https://avatars.githubusercontent.com/u/121595180?s=200&v=4" width="80px"></a>
+MIT. Open Mosaic is derived from Zellij and preserves the upstream license and
+copyright notices.

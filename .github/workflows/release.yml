@@ -18,7 +18,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && '' || github.ref }}
-          release_name: Release ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          release_name: Open Mosaic ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
           draft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: false
 
@@ -118,27 +118,28 @@ jobs:
         if: runner.os != 'Windows'
         id: make-artifact-unix
         run: |
-          asset_name="zellij-${{ matrix.target }}.tar.gz"
-          tar cvzf "${asset_name}" -C "target/${{ matrix.target }}/release" zellij
+          asset_name="open-mosaic-${{ matrix.target }}.tar.gz"
+          tar cvzf "${asset_name}" -C "target/${{ matrix.target }}/release" mosaic zellij
           echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
 
       - name: Create artifact (Windows)
         if: runner.os == 'Windows'
         id: make-artifact-windows
         run: |
-          $asset_name = "zellij-${{ matrix.target }}.zip"
-          Compress-Archive -Path "target/release/zellij.exe" -DestinationPath $asset_name
+          $asset_name = "open-mosaic-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/release/mosaic.exe", "target/release/zellij.exe" -DestinationPath $asset_name
           echo "asset_name=$asset_name" >> $env:GITHUB_OUTPUT
 
       - name: Create checksum (Unix)
         if: runner.os != 'Windows'
         id: make-checksum-unix
         run: |
-          checksum_name="zellij-${{ matrix.target }}.sha256sum"
+          asset_name="${{ steps.make-artifact-unix.outputs.asset_name }}"
+          checksum_name="open-mosaic-${{ matrix.target }}.sha256sum"
           if [[ "$RUNNER_OS" != "macOS" ]]; then
-            sha256sum "target/${{ matrix.target }}/release/zellij" > "${checksum_name}"
+            sha256sum "${asset_name}" > "${checksum_name}"
           else
-            shasum -a 256 "target/${{ matrix.target }}/release/zellij" > "${checksum_name}"
+            shasum -a 256 "${asset_name}" > "${checksum_name}"
           fi
           echo "checksum_name=${checksum_name}" >> "$GITHUB_OUTPUT"
 
@@ -146,9 +147,10 @@ jobs:
         if: runner.os == 'Windows'
         id: make-checksum-windows
         run: |
-          $checksum_name = "zellij-${{ matrix.target }}.sha256sum"
-          $hash = (Get-FileHash "target/release/zellij.exe" -Algorithm SHA256).Hash.ToLower()
-          "$hash  target/release/zellij.exe" | Out-File -Encoding ascii $checksum_name
+          $asset_name = "${{ steps.make-artifact-windows.outputs.asset_name }}"
+          $checksum_name = "open-mosaic-${{ matrix.target }}.sha256sum"
+          $hash = (Get-FileHash $asset_name -Algorithm SHA256).Hash.ToLower()
+          "$hash  $asset_name" | Out-File -Encoding ascii $checksum_name
           echo "checksum_name=$checksum_name" >> $env:GITHUB_OUTPUT
 
       - name: Upload release archive
@@ -158,7 +160,7 @@ jobs:
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: ${{ steps.make-artifact-unix.outputs.asset_name || steps.make-artifact-windows.outputs.asset_name }}
-          asset_name: ${{ runner.os == 'Windows' && format('zellij-{0}.zip', matrix.target) || format('zellij-{0}.tar.gz', matrix.target) }}
+          asset_name: ${{ runner.os == 'Windows' && format('open-mosaic-{0}.zip', matrix.target) || format('open-mosaic-{0}.tar.gz', matrix.target) }}
           asset_content_type: application/octet-stream
 
       - name: Upload checksum
@@ -168,7 +170,7 @@ jobs:
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: ${{ steps.make-checksum-unix.outputs.checksum_name || steps.make-checksum-windows.outputs.checksum_name }}
-          asset_name: zellij-${{matrix.target}}.sha256sum
+          asset_name: open-mosaic-${{matrix.target}}.sha256sum
           asset_content_type: text/plain
 
       # ===== Windows MSI installer =====
@@ -189,15 +191,15 @@ jobs:
             -d Version=$version `
             -arch x64 `
             -ext WixToolset.UI.wixext `
-            -o target\wix\zellij-x86_64-pc-windows-msvc-installer.msi
+            -o target\wix\open-mosaic-x86_64-pc-windows-msvc-installer.msi
 
       - name: Create MSI checksum
         if: runner.os == 'Windows'
         id: make-checksum-msi
         run: |
-          $checksum_name = "zellij-${{ matrix.target }}-installer.sha256sum"
-          $hash = (Get-FileHash "target\wix\zellij-${{ matrix.target }}-installer.msi" -Algorithm SHA256).Hash.ToLower()
-          "$hash  zellij-${{ matrix.target }}-installer.msi" | Out-File -Encoding ascii $checksum_name
+          $checksum_name = "open-mosaic-${{ matrix.target }}-installer.sha256sum"
+          $hash = (Get-FileHash "target\wix\open-mosaic-${{ matrix.target }}-installer.msi" -Algorithm SHA256).Hash.ToLower()
+          "$hash  open-mosaic-${{ matrix.target }}-installer.msi" | Out-File -Encoding ascii $checksum_name
           echo "checksum_name=$checksum_name" >> $env:GITHUB_OUTPUT
 
       - name: Upload MSI installer
@@ -207,8 +209,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: target\wix\zellij-${{ matrix.target }}-installer.msi
-          asset_name: zellij-${{ matrix.target }}-installer.msi
+          asset_path: target\wix\open-mosaic-${{ matrix.target }}-installer.msi
+          asset_name: open-mosaic-${{ matrix.target }}-installer.msi
           asset_content_type: application/octet-stream
 
       - name: Upload MSI checksum
@@ -219,7 +221,7 @@ jobs:
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: ${{ steps.make-checksum-msi.outputs.checksum_name }}
-          asset_name: zellij-${{ matrix.target }}-installer.sha256sum
+          asset_name: open-mosaic-${{ matrix.target }}-installer.sha256sum
           asset_content_type: text/plain
 
   build-release-noweb:
@@ -318,27 +320,28 @@ jobs:
         if: runner.os != 'Windows'
         id: make-artifact-unix
         run: |
-          asset_name="zellij-no-web-${{ matrix.target }}.tar.gz"
-          tar cvzf "${asset_name}" -C "target/${{ matrix.target }}/release" zellij
+          asset_name="open-mosaic-no-web-${{ matrix.target }}.tar.gz"
+          tar cvzf "${asset_name}" -C "target/${{ matrix.target }}/release" mosaic zellij
           echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
 
       - name: Create artifact (Windows)
         if: runner.os == 'Windows'
         id: make-artifact-windows
         run: |
-          $asset_name = "zellij-no-web-${{ matrix.target }}.zip"
-          Compress-Archive -Path "target/release/zellij.exe" -DestinationPath $asset_name
+          $asset_name = "open-mosaic-no-web-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/release/mosaic.exe", "target/release/zellij.exe" -DestinationPath $asset_name
           echo "asset_name=$asset_name" >> $env:GITHUB_OUTPUT
 
       - name: Create checksum (Unix)
         if: runner.os != 'Windows'
         id: make-checksum-unix
         run: |
-          checksum_name="zellij-no-web-${{ matrix.target }}.sha256sum"
+          asset_name="${{ steps.make-artifact-unix.outputs.asset_name }}"
+          checksum_name="open-mosaic-no-web-${{ matrix.target }}.sha256sum"
           if [[ "$RUNNER_OS" != "macOS" ]]; then
-            sha256sum "target/${{ matrix.target }}/release/zellij" > "${checksum_name}"
+            sha256sum "${asset_name}" > "${checksum_name}"
           else
-            shasum -a 256 "target/${{ matrix.target }}/release/zellij" > "${checksum_name}"
+            shasum -a 256 "${asset_name}" > "${checksum_name}"
           fi
           echo "checksum_name=${checksum_name}" >> "$GITHUB_OUTPUT"
 
@@ -346,9 +349,10 @@ jobs:
         if: runner.os == 'Windows'
         id: make-checksum-windows
         run: |
-          $checksum_name = "zellij-no-web-${{ matrix.target }}.sha256sum"
-          $hash = (Get-FileHash "target/release/zellij.exe" -Algorithm SHA256).Hash.ToLower()
-          "$hash  target/release/zellij.exe" | Out-File -Encoding ascii $checksum_name
+          $asset_name = "${{ steps.make-artifact-windows.outputs.asset_name }}"
+          $checksum_name = "open-mosaic-no-web-${{ matrix.target }}.sha256sum"
+          $hash = (Get-FileHash $asset_name -Algorithm SHA256).Hash.ToLower()
+          "$hash  $asset_name" | Out-File -Encoding ascii $checksum_name
           echo "checksum_name=$checksum_name" >> $env:GITHUB_OUTPUT
 
       - name: Upload release archive
@@ -358,7 +362,7 @@ jobs:
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: ${{ steps.make-artifact-unix.outputs.asset_name || steps.make-artifact-windows.outputs.asset_name }}
-          asset_name: ${{ runner.os == 'Windows' && format('zellij-no-web-{0}.zip', matrix.target) || format('zellij-no-web-{0}.tar.gz', matrix.target) }}
+          asset_name: ${{ runner.os == 'Windows' && format('open-mosaic-no-web-{0}.zip', matrix.target) || format('open-mosaic-no-web-{0}.tar.gz', matrix.target) }}
           asset_content_type: application/octet-stream
 
       - name: Upload checksum
@@ -368,7 +372,7 @@ jobs:
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: ${{ steps.make-checksum-unix.outputs.checksum_name || steps.make-checksum-windows.outputs.checksum_name }}
-          asset_name: zellij-no-web-${{matrix.target}}.sha256sum
+          asset_name: open-mosaic-no-web-${{matrix.target}}.sha256sum
           asset_content_type: text/plain
 
       # ===== Windows MSI installer (no-web) =====
@@ -389,15 +393,15 @@ jobs:
             -d Version=$version `
             -arch x64 `
             -ext WixToolset.UI.wixext `
-            -o target\wix\zellij-no-web-${{ matrix.target }}-installer.msi
+            -o target\wix\open-mosaic-no-web-${{ matrix.target }}-installer.msi
 
       - name: Create MSI checksum (no-web)
         if: runner.os == 'Windows'
         id: make-checksum-msi
         run: |
-          $checksum_name = "zellij-no-web-${{ matrix.target }}-installer.sha256sum"
-          $hash = (Get-FileHash "target\wix\zellij-no-web-${{ matrix.target }}-installer.msi" -Algorithm SHA256).Hash.ToLower()
-          "$hash  zellij-no-web-${{ matrix.target }}-installer.msi" | Out-File -Encoding ascii $checksum_name
+          $checksum_name = "open-mosaic-no-web-${{ matrix.target }}-installer.sha256sum"
+          $hash = (Get-FileHash "target\wix\open-mosaic-no-web-${{ matrix.target }}-installer.msi" -Algorithm SHA256).Hash.ToLower()
+          "$hash  open-mosaic-no-web-${{ matrix.target }}-installer.msi" | Out-File -Encoding ascii $checksum_name
           echo "checksum_name=$checksum_name" >> $env:GITHUB_OUTPUT
 
       - name: Upload MSI installer (no-web)
@@ -407,8 +411,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: target\wix\zellij-no-web-${{ matrix.target }}-installer.msi
-          asset_name: zellij-no-web-${{ matrix.target }}-installer.msi
+          asset_path: target\wix\open-mosaic-no-web-${{ matrix.target }}-installer.msi
+          asset_name: open-mosaic-no-web-${{ matrix.target }}-installer.msi
           asset_content_type: application/octet-stream
 
       - name: Upload MSI checksum (no-web)
@@ -419,5 +423,5 @@ jobs:
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: ${{ steps.make-checksum-msi.outputs.checksum_name }}
-          asset_name: zellij-no-web-${{ matrix.target }}-installer.sha256sum
+          asset_name: open-mosaic-no-web-${{ matrix.target }}-installer.sha256sum
           asset_content_type: text/plain

@@ -1,144 +1,105 @@
-# How to release a zellij version
+# Open Mosaic Release Guide
 
-This document is primarily target at zellij maintainers in need to (prepare to)
-release a new zellij version.
+Open Mosaic releases are built from this fork and should be published as
+Open Mosaic artifacts. The project is derived from Zellij, so every release
+must preserve `LICENSE.md`, `NOTICE.md`, and upstream attribution.
 
+Do not publish Open Mosaic artifacts to upstream Zellij repositories, package
+registries, or release pages.
 
-## Simulating a release
+## Artifact Names
 
-This section explains how to do a "dry-run" of the release process. This is
-useful to check if a release is successful beforehand, i.e. before publishing
-it to the world. Because there is no "undo"-button for a real release as
-described below, it is recommended to perform a simulated release first.
+The GitHub release workflow publishes Open Mosaic archives:
 
+```text
+open-mosaic-<target>.tar.gz
+open-mosaic-<target>.zip
+open-mosaic-<target>.sha256sum
+open-mosaic-no-web-<target>.tar.gz
+open-mosaic-no-web-<target>.zip
+open-mosaic-no-web-<target>.sha256sum
+```
 
-### Requirements
+Windows installer artifacts use:
 
-You only need a publicly accessible Git repository to provide a cargo registry.
+```text
+open-mosaic-<target>-installer.msi
+open-mosaic-<target>-installer.sha256sum
+open-mosaic-no-web-<target>-installer.msi
+open-mosaic-no-web-<target>-installer.sha256sum
+```
 
+Archives include both:
 
-### High-level concept
+- `mosaic`: native Open Mosaic control CLI.
+- `zellij`: compatibility workspace binary inherited from Zellij.
 
-The setup explained below will host a third-party cargo registry software
-([ktra](https://github.com/moriturus/ktra)) locally on your PC. In order for
-`cargo` to pick this up and be able to work with it, we must perform a few
-modifications to the zellij repository and other components. Once setup, we
-release a zellij version to this private registry and install zellij from there
-to make sure it works as expected.
+The compatibility binary remains part of the distribution until the interactive
+runtime has a separate Mosaic entrypoint.
 
+## Local Release Build
 
-### Step-by-step guide
+Build both binaries locally:
 
-1. Create a cargo index repository
-    1. Create a new repo on some git forge (GitHub/GitLab/...)
-    1. Clone the repo **with HTTPS (not SSH)**, we'll refer to the `https://`
-       clone-url as `$INDEX_REPO` for the remainder of this text
-    1. Add a file named `config.json` with the following content in the root:
-       ```json
-       {"dl":"http://localhost:8000/dl","api":"http://localhost:8000"}
-       ```
-    1. Generate an access token for full repo access, we'll refer to this as
-       `$TOKEN` for the remained of this text
-    1. Create and push a commit with these changes. Provide the following HTTPS
-       credentials:
-        1. Username: Your git-forge username
-        1. Password: `$TOKEN`
-1. Prepare the zellij repo
-    1. `cd` into your local copy of the zellij repository
-    1. Add a new cargo registry to `.cargo/config.toml` like this:
-       ```toml
-       
-       [registries]
-       ktra = { index = "https://$INDEX_REPO" }
-       ```
-    1. Modify **all** `Cargo.toml` in the zellij repo to retrieve the individual
-       zellij subcrates from the private registry:
-        1. Find all dependencies that look like this:
-           ```toml
-           zellij-utils = { path = "../zellij-utils/", version = "XXX" }
-           ```
-        1. Change them to look like this
-           ```toml
-           zellij-utils = { path = "../zellij-utils/", version = "XXX", registry = "ktra" }
-           ```
-        1. This applies to all zellij subcrates, e.g. `zellij-client`,
-           `zellij-server`, ... You can ignore the plugins, because these aren't
-           released as sources.
-1. Launch your private registry
-    1. Create the file `~/.cargo/config.toml` with the following content:
-       ```
-       [registries.ktra]
-       index = "https://$INDEX_REPO"
-       ```
-    1. Install `ktra`, the registry server: `cargo install ktra`
-    1. In a separate shell/pane/whatever, navigate to some folder where you
-       want to store all data for the registry
-    1. Create a config file for `ktra` named `ktra.toml` there with the
-       following content:
-       ```toml
-       [index_config]
-       remote_url = "https://$INDEX_REPO"
-       https_username = "your-git-username"
-       https_password = "$TOKEN" 
-       branch = "main"  # Or whatever branch name you used
-       ```
-    1. Launch ktra (with logging to see what happens): `RUST_LOG=debug ktra`
-    1. Get a registry token for `ktra` (The details don't really matter, unless
-       you want to reuse this registry):
-       ```bash
-       curl -X POST -H 'Content-Type: application/json' -d '{"password":"PASSWORD"}' http://localhost:8000/ktra/api/v1/new_user/ALICE
-       ```
-    1. Login to the registry with the token you received as reply to the
-       previous command:
-       ```bash
-       cargo login --registry ktra "KTRA_TOKEN"
-       ```
-1. **Install safety measures to prevent accidentally performing a real release**:
-    1. In your `zellij` repo, remove all configured remotes that allow you to
-       push/publish directly to the zellij main GitHub repo. Setup a fork of
-       the main zellij repo instead and configure a remote that allows you to
-       push/publish to that. Please, this is very important.
-    1. Comment out the entire `[registry]` section in `~/.cargo/credentials` to
-       prevent accidentally pushing a new release to `crates.io`.
-1. **Simulate a release**
-    1. Go back to the zellij repo, type:
-       ```bash
-       cargo x publish --git-remote <YOUR_ZELLIJ_FORK> --cargo-registry ktra
-       ```
-    1. A prompt will open with the commit message for the release commit. Just
-       save and close your editor to continue
-    1. If all goes well, the release will be done in a few minutes and all the
-       crates are published to the private `ktra` registry!
-1. Testing the release binary
-    1. Install zellij from the registry to some local directory like this:
-       ```bash
-       $ cargo install --registry ktra --root /tmp zellij
-       ```
-    1. Execute the binary to see if all went well:
-       ```bash
-       $ /tmp/bin/zellij
-       ```
-1. Cleaning up
-    1. Uncomment the `[registry]` section in `~/.cargo/config.toml`
-    1. Restore your original git remotes for the zellij repo
-    1. Undo your last commit:
-       ```bash
-       $ git reset --hard HEAD~1
-       ```
-    1. Undo your last commit in the remote zellij repo:
-       ```bash
-       $ git push --force <YOUR_ZELLIJ_FORK>
-       ```
-    1. Delete the release tag:
-       ```bash
-       $ git tag -d "vX.Y.Z"
-       ```
-    1. Delete the release tag in the remote zellij repo
-       ```bash
-       $ git push <YOUR_ZELLIJ_FORK> --force --delete "vX.Y.Z"
-       ```
+```sh
+cargo build --release --bin mosaic --bin zellij
+```
 
-You're done! :tada:
+Install for a local smoke test:
 
+```sh
+install -Dm755 target/release/mosaic "$HOME/.local/bin/mosaic"
+install -Dm755 target/release/zellij "$HOME/.local/bin/zellij"
+mosaic --version
+zellij --version
+```
 
-## Releasing a new version
+Run a basic control-plane smoke:
+
+```sh
+mosaic --dry-run --session no-such-session prompt send --pane-id 1 --text "hello"
+mosaic adapters list
+```
+
+## GitHub Release
+
+The release workflow runs on tags matching `v*.*.*` and on manual dispatch.
+Manual dispatch creates a draft release for `main`.
+
+Before tagging:
+
+```sh
+cargo fmt --check
+cargo check --bin mosaic --no-default-features --features vendored_curl
+cargo test --bin mosaic --no-default-features --features vendored_curl
+cargo test --test mosaic_cli --no-default-features --features vendored_curl
+cargo package --list
+```
+
+After the workflow publishes assets, verify:
+
+- Asset names start with `open-mosaic-`.
+- Normal and no-web archives contain `mosaic` and `zellij`.
+- `.sha256sum` files hash the uploaded archive or installer artifact.
+- Windows MSI identifies itself as Open Mosaic and installs into an Open Mosaic
+  folder, not an upstream Zellij folder.
+
+## Upstream Maintenance
+
+Keep the `upstream` remote pull-only. Pull from
+`https://github.com/zellij-org/zellij.git` when syncing, but do not push Open
+Mosaic branches or tags upstream.
+
+When accepting upstream changes, preserve Open Mosaic-specific files and review
+conflicts around:
+
+- `src/bin/mosaic.rs`
+- `src/bin/mosaic/*`
+- `docs/MOSAIC_*.md`
+- `docs/OPEN_MOSAIC.md`
+- `docs/GETTING_STARTED.md`
+- `.github/workflows/release.yml`
+- `NOTICE.md`
+
+If upstream Zellij changes licensing or attribution files, reconcile them
+manually and keep notices intact.
