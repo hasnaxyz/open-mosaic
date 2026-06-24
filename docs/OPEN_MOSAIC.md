@@ -39,6 +39,7 @@ goal/task registries and the optional external todos adapter are documented in
 `docs/MOSAIC_GOALS.md`.
 Bookmarkable web oversight links are documented in `docs/MOSAIC_WEB.md`.
 Upstream sync and license hygiene are documented in
-`docs/UPSTREAM_MAINTENANCE.md`.
+`docs/UPSTREAM_MAINTENANCE.md`; the fork-base architecture audit is in
+`docs/ZELLIJ_ARCHITECTURE_AUDIT.md`.
 Existing Zellij-derived crate and runtime names are implementation
 compatibility unless the relevant document says otherwise.

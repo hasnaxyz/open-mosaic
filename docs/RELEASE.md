@@ -111,6 +111,7 @@ conflicts around:
 - `docs/MOSAIC_*.md`
 - `docs/OPEN_MOSAIC.md`
 - `docs/GETTING_STARTED.md`
+- `docs/ZELLIJ_ARCHITECTURE_AUDIT.md`
 - `.github/workflows/release.yml`
 - `NOTICE.md`
 
