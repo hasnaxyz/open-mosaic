@@ -79,6 +79,8 @@ for:
 - `audit.actor`
 - `machine.local`
 - `machine.context`
+- `machine.registry`
+- `machine.exec`
 - `transport.local_process`
 - `transport.local_socket`
 - `transport.ssh`
@@ -88,3 +90,6 @@ Optional Hasna or open-* integrations should be represented as ordinary
 manifests with these portable fields. They must remain optional and must not
 be required for local session, pane, prompt, observation, queue, or audit
 commands to work.
+
+Machine registry files and SSH transport behavior are documented in
+`docs/MOSAIC_MACHINES.md`.

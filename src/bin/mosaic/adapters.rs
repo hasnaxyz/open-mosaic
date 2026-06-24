@@ -92,7 +92,12 @@ pub fn built_in_adapters() -> Vec<Value> {
             "mosaic.machine.local",
             "machine_registry",
             "Local machine metadata",
-            &["machine.local", "machine.context"],
+            &[
+                "machine.local",
+                "machine.context",
+                "machine.registry",
+                "machine.exec",
+            ],
         ),
         adapter(
             "mosaic.transport.local",

@@ -15,6 +15,7 @@ fn mosaic_help_exposes_agentic_control_surface() {
     assert!(stdout.contains("queue"));
     assert!(stdout.contains("audit"));
     assert!(stdout.contains("adapters"));
+    assert!(stdout.contains("machines"));
     assert!(stdout.contains("observe"));
     assert!(stdout.contains("subscribe"));
     assert!(stdout.contains("dashboard"));
@@ -141,6 +142,269 @@ fn adapters_validate_rejects_invalid_manifests() {
     let error: Value =
         serde_json::from_str(String::from_utf8_lossy(&output.stderr).trim()).expect("error");
     assert_eq!(error["code"], "invalid_adapter_manifest");
+}
+
+fn machine_registry_json() -> Value {
+    json!({
+        "schema_version": "mosaic.machine.v1",
+        "machines": [
+            {
+                "id": "dev-box",
+                "name": "Development box",
+                "transport": {
+                    "kind": "ssh",
+                    "host": "dev.example.org",
+                    "user": "alice",
+                    "port": 2222,
+                    "mosaic_bin": "/usr/local/bin/mosaic"
+                }
+            }
+        ]
+    })
+}
+
+#[test]
+fn machines_local_returns_portable_descriptor() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args(["machines", "local"])
+        .output()
+        .expect("mosaic machines local should run");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let envelope: Value = serde_json::from_str(stdout.trim()).expect("local machine json");
+    assert_eq!(envelope["schema_version"], "mosaic.control.v1");
+    assert_eq!(envelope["event"], "machines.local");
+    assert_eq!(envelope["machine_schema_version"], "mosaic.machine.v1");
+    assert_eq!(envelope["data"]["id"], "local");
+    assert_eq!(envelope["data"]["transport"]["kind"], "local");
+    assert!(!stdout.contains("/home/hasna"));
+    assert!(!stdout.contains("\"user\":\"hasna\""));
+    assert!(!stdout.to_ascii_lowercase().contains("spark"));
+}
+
+#[test]
+fn machines_validate_accepts_ssh_registry_without_connecting() {
+    let temp = tempdir().expect("machine tempdir");
+    let registry_path = temp.path().join("machines.json");
+    fs::write(&registry_path, machine_registry_json().to_string()).expect("write registry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "machines",
+            "validate",
+            "--file",
+            registry_path.to_str().expect("registry path"),
+        ])
+        .output()
+        .expect("mosaic machines validate should run");
+    assert!(output.status.success());
+
+    let envelope: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("validation");
+    assert_eq!(envelope["event"], "machines.validate");
+    assert_eq!(envelope["valid"], true);
+    assert_eq!(envelope["registry"]["machines"][0]["id"], "dev-box");
+}
+
+#[test]
+fn machines_list_includes_local_and_configured_machines() {
+    let temp = tempdir().expect("machine tempdir");
+    let registry_path = temp.path().join("machines.json");
+    fs::write(&registry_path, machine_registry_json().to_string()).expect("write registry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "machines",
+            "list",
+            "--file",
+            registry_path.to_str().expect("registry path"),
+        ])
+        .output()
+        .expect("mosaic machines list should run");
+    assert!(output.status.success());
+
+    let envelope: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("machine list");
+    assert_eq!(envelope["event"], "machines.list");
+    assert_eq!(envelope["registry"]["loaded"], true);
+    let machines = envelope["data"].as_array().expect("machines");
+    assert!(machines
+        .iter()
+        .any(|machine| machine["id"].as_str() == Some("local")));
+    assert!(machines
+        .iter()
+        .any(|machine| machine["id"].as_str() == Some("dev-box")));
+}
+
+#[test]
+fn machines_validate_rejects_unsafe_ssh_hosts() {
+    let temp = tempdir().expect("machine tempdir");
+    let registry_path = temp.path().join("machines.json");
+    let mut registry = machine_registry_json();
+    registry["machines"][0]["transport"]["host"] = json!("-oProxyCommand=bad");
+    fs::write(&registry_path, registry.to_string()).expect("write registry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "machines",
+            "validate",
+            "--file",
+            registry_path.to_str().expect("registry path"),
+        ])
+        .output()
+        .expect("mosaic machines validate should run");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+
+    let error: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stderr).trim()).expect("error");
+    assert_eq!(error["code"], "invalid_machine_registry");
+    assert!(error["message"]
+        .as_str()
+        .expect("message")
+        .contains("ssh host must not start"));
+}
+
+#[test]
+fn machines_list_rejects_config_that_shadows_builtin_local_machine() {
+    let temp = tempdir().expect("machine tempdir");
+    let registry_path = temp.path().join("machines.json");
+    let mut registry = machine_registry_json();
+    registry["machines"][0]["id"] = json!("local");
+    fs::write(&registry_path, registry.to_string()).expect("write registry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "machines",
+            "list",
+            "--file",
+            registry_path.to_str().expect("registry path"),
+        ])
+        .output()
+        .expect("mosaic machines list should run");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+
+    let error: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stderr).trim()).expect("error");
+    assert_eq!(error["code"], "invalid_machine_registry");
+    assert!(error["message"]
+        .as_str()
+        .expect("message")
+        .contains("reserved"));
+}
+
+#[test]
+fn machines_exec_dry_run_plans_ssh_without_leaking_redacted_prompt() {
+    let temp = tempdir().expect("machine tempdir");
+    let state_dir = temp.path().join("state");
+    let registry_path = temp.path().join("machines.json");
+    fs::write(&registry_path, machine_registry_json().to_string()).expect("write registry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", &state_dir)
+        .args([
+            "--dry-run",
+            "machines",
+            "exec",
+            "--file",
+            registry_path.to_str().expect("registry path"),
+            "--machine",
+            "dev-box",
+            "--redact-command",
+            "--",
+            "prompt",
+            "send",
+            "--text",
+            "hello; rm -rf /",
+        ])
+        .output()
+        .expect("mosaic machines exec dry-run should run");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let event: Value = serde_json::from_str(stdout.trim()).expect("machine exec event");
+    assert_eq!(event["event"], "machines.exec");
+    assert_eq!(event["status"], "dry_run");
+    assert_eq!(event["ack"], "none");
+    assert_eq!(event["machine"], "dev-box");
+    assert_eq!(event["transport"], "ssh");
+    assert_eq!(event["command"]["argv"][0], "ssh");
+    assert_eq!(event["command"]["argv"][6], "[redacted]");
+    assert_eq!(event["command"]["mosaic_command"][4], "[redacted]");
+    assert_eq!(event["command"]["remote_shell_command"], "[redacted]");
+    assert!(!stdout.contains("hello; rm -rf /"));
+
+    let audit_path = state_dir.join("open-mosaic").join("audit.ndjson");
+    let audit = fs::read_to_string(audit_path).expect("audit record");
+    assert!(!audit.contains("hello; rm -rf /"));
+    assert!(audit.contains("\"operation\":\"machines.exec\""));
+}
+
+#[test]
+fn machines_exec_dry_run_shell_quotes_ssh_remote_command() {
+    let temp = tempdir().expect("machine tempdir");
+    let registry_path = temp.path().join("machines.json");
+    fs::write(&registry_path, machine_registry_json().to_string()).expect("write registry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "--dry-run",
+            "machines",
+            "exec",
+            "--file",
+            registry_path.to_str().expect("registry path"),
+            "--machine",
+            "dev-box",
+            "--",
+            "sessions",
+            "list",
+            "--filter",
+            "name; whoami",
+        ])
+        .output()
+        .expect("mosaic machines exec dry-run should run");
+    assert!(output.status.success());
+
+    let event: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("exec event");
+    assert_eq!(
+        event["command"]["remote_shell_command"],
+        "/usr/local/bin/mosaic sessions list --filter 'name; whoami'"
+    );
+    assert_eq!(
+        event["command"]["args"][5],
+        "/usr/local/bin/mosaic sessions list --filter 'name; whoami'"
+    );
+}
+
+#[test]
+fn machines_exec_local_runs_mosaic_command_without_registry() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "machines",
+            "exec",
+            "--machine",
+            "local",
+            "--mosaic-bin",
+            env!("CARGO_BIN_EXE_mosaic"),
+            "--",
+            "--version",
+        ])
+        .output()
+        .expect("mosaic machines exec local should run");
+    assert!(output.status.success());
+
+    let event: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("exec event");
+    assert_eq!(event["event"], "machines.exec");
+    assert_eq!(event["status"], "completed");
+    assert_eq!(event["ack"], "process_exited");
+    assert_eq!(event["machine"], "local");
+    assert_eq!(event["transport"], "local");
+    assert_eq!(event["exit_code"], 0);
+    assert!(event["stdout"].as_str().expect("stdout").contains("mosaic"));
 }
 
 #[test]
