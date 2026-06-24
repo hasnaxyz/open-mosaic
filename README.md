@@ -60,6 +60,9 @@ Reference docs:
 
 - [Mosaic CLI](docs/MOSAIC_CLI.md)
 - [Adapter manifests](docs/MOSAIC_ADAPTERS.md)
+- [Migration notes from Zellij and tmux](docs/MIGRATION.md)
+- [Open Mosaic and tmux for agents](docs/TMUX_FOR_AGENTS.md)
+- [Optional dispatch integration](docs/DISPATCH_INTEGRATION.md)
 - [Open Mosaic product contract](docs/OPEN_MOSAIC.md)
 
 ## How Open Mosaic Differs From Zellij
@@ -72,6 +75,10 @@ by Zellij.
 The fork does not claim to be upstream Zellij, and it preserves Zellij's MIT
 license notices and attribution. See [NOTICE.md](NOTICE.md) and
 [LICENSE.md](LICENSE.md).
+
+Migration guidance from upstream Zellij and tmux is in
+[docs/MIGRATION.md](docs/MIGRATION.md). A focused comparison for agent
+controllers is in [docs/TMUX_FOR_AGENTS.md](docs/TMUX_FOR_AGENTS.md).
 
 ## Development
 

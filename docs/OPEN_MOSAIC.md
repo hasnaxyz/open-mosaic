@@ -22,5 +22,8 @@ Core requirements:
 The first native surface is the `mosaic` binary, documented in
 `docs/MOSAIC_CLI.md`. Getting started commands are in
 `docs/GETTING_STARTED.md`. Portable adapter manifests are documented in
-`docs/MOSAIC_ADAPTERS.md`. Existing Zellij-derived crate and runtime names are
-implementation compatibility unless the relevant document says otherwise.
+`docs/MOSAIC_ADAPTERS.md`. Migration notes from Zellij and tmux are in
+`docs/MIGRATION.md`, with an agent-focused tmux comparison in
+`docs/TMUX_FOR_AGENTS.md`. Optional dispatch backend guidance is in
+`docs/DISPATCH_INTEGRATION.md`. Existing Zellij-derived crate and runtime names
+are implementation compatibility unless the relevant document says otherwise.
