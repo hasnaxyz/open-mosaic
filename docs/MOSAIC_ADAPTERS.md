@@ -19,6 +19,7 @@ mosaic adapters validate --file adapter.json
 kinds:
 
 - `agent`
+- `goal_system`
 - `project_registry`
 - `task_system`
 - `identity`
@@ -72,6 +73,11 @@ for:
 - `observe.pane`
 - `project.detect`
 - `repo.metadata`
+- `goal.reference`
+- `goal.status`
+- `goal.context`
+- `goal.import.todos`
+- `task.import.todos`
 - `task.reference`
 - `task.link_ref`
 - `task.status`
@@ -92,4 +98,5 @@ be required for local session, pane, prompt, observation, queue, or audit
 commands to work.
 
 Machine registry files and SSH transport behavior are documented in
-`docs/MOSAIC_MACHINES.md`.
+`docs/MOSAIC_MACHINES.md`. Portable goal/task registries and the optional
+external `todos` adapter are documented in `docs/MOSAIC_GOALS.md`.

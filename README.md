@@ -4,7 +4,8 @@ Open Mosaic is an OSS-first agentic terminal workspace forked from
 [Zellij](https://github.com/zellij-org/zellij). It keeps Zellij's terminal
 multiplexer foundation and adds native Mosaic control APIs for agent workflows:
 structured session/pane discovery, prompt delivery receipts, prompt queues,
-agent metadata, pane observation, audit records, and portable adapter manifests.
+agent metadata, pane observation, audit records, portable goal/task context,
+and portable adapter manifests.
 
 Open Mosaic is intended to work on normal developer machines without private
 Hasna infrastructure. Optional Hasna or open-* integrations must live behind
@@ -52,6 +53,7 @@ mosaic --session demo prompt send --pane-id 1 --text "pwd" --submit enter
 mosaic --session demo observe pane --pane-id 1 --last-lines 40
 mosaic --session demo queue list
 mosaic --session demo dashboard --live --redact
+mosaic goals list --redact
 mosaic audit list --redact
 mosaic adapters list
 ```
@@ -61,6 +63,7 @@ Reference docs:
 - [Mosaic CLI](docs/MOSAIC_CLI.md)
 - [Adapter manifests](docs/MOSAIC_ADAPTERS.md)
 - [Machines and transports](docs/MOSAIC_MACHINES.md)
+- [Goals and tasks](docs/MOSAIC_GOALS.md)
 - [Migration notes from Zellij and tmux](docs/MIGRATION.md)
 - [Open Mosaic and tmux for agents](docs/TMUX_FOR_AGENTS.md)
 - [Optional dispatch integration](docs/DISPATCH_INTEGRATION.md)

@@ -164,6 +164,30 @@ normal Mosaic command named after `--` on the target machine; use top-level
 command. See `docs/MOSAIC_MACHINES.md` for the registry shape and SSH safety
 rules.
 
+## Goals And Tasks
+
+```sh
+mosaic goals list
+mosaic goals list --file goals.json --redact
+mosaic goals validate --file goals.json
+mosaic --dry-run goals todos-plan --project /work/repo --plan plan-id --redact
+```
+
+`goals` is the portable task/goal context surface. The generic registry schema
+is `mosaic.goals.v1`, stored by default at
+`$XDG_CONFIG_HOME/open-mosaic/goals.json` or
+`~/.config/open-mosaic/goals.json`. If the default file is absent,
+`goals list` returns an empty registry with `configured: false`; explicit
+`--file` paths must exist and validate.
+
+`goals todos-plan` is an optional adapter command that runs the external
+`todos` CLI only when requested, using argv execution rather than a shell. It
+normalizes `todos --project <path> --json plans --show <plan-id>` into a
+Mosaic `goals.todos_plan` envelope. Top-level `--dry-run` returns the planned
+argv without executing the adapter. `--redact` hides task text and local paths
+from returned JSON. See `docs/MOSAIC_GOALS.md` for the full registry shape and
+adapter boundary.
+
 ## Observation
 
 ```sh
@@ -202,30 +226,34 @@ mosaic dashboard
 mosaic dashboard --format text
 mosaic --session work dashboard
 mosaic --session work dashboard --live --redact
+mosaic dashboard --goals-file goals.json --redact
 ```
 
 `dashboard` returns a `dashboard.snapshot` envelope that combines local Mosaic
 state into one compact view for agents, scripts, and terminal dashboard panes.
 It does not require private services. Without `--live`, it only reads local
-user state and the session list: pending queues, recent audit records, and
-running session names. With `--live`, it also asks the target Mosaic/Zellij
-session for panes and tabs, enriches panes with `mosaic_agent` metadata, and
-summarizes agent kinds without returning full raw pane dumps.
+user state and the session list: pending queues, recent audit records, optional
+goals/tasks, and running session names. With `--live`, it also asks the target
+Mosaic/Zellij session for panes and tabs, enriches panes with `mosaic_agent`
+metadata, and summarizes agent kinds without returning full raw pane dumps.
 
 Queued prompt bodies are redacted by default in dashboard JSON and text output.
 Pass `--show-prompts` only when the caller is allowed to view queued prompt
 content. `--redact` forces prompt-body redaction and redacts live pane titles,
-current task text, local paths, and command details from live agent summaries.
-When `--live` cannot capture panes or tabs, the command still returns the local
-queue/audit/session snapshot with `partial: true`, an `errors` array, and
-`live.status: "error"`. The text format is intended for a compact terminal pane
-and sanitizes control characters from dynamic labels:
+current task text, goals/task text, local paths, and command details from live
+agent summaries. When one section cannot be read, for example live panes, a
+configured goals registry, local queues, or the audit log, the command still
+returns the remaining snapshot with `partial: true`, an `errors` array, and a
+section-specific status such as `live.status: "error"` or
+`goals.status: "error"`. The text format is intended for a compact terminal
+pane and sanitizes control characters from dynamic labels:
 
 ```text
 Open Mosaic Dashboard
 Sessions: 1 running
 Queues: 2 pending (redacted)
 Audit: 6 records
+Goals: 1 goals, 3 tasks (loaded)
 Live: not_requested
 Agent Metadata: 0 panes
 ```

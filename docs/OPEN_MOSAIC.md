@@ -3,7 +3,7 @@
 Open Mosaic is an OSS-first agentic terminal workspace forked from Zellij. It
 preserves Zellij's MIT license and attribution while adding agent-native
 control APIs, structured observation, prompt receipts, audit records, and
-portable adapter points.
+portable goal/task context and adapter points.
 
 Core requirements:
 
@@ -17,6 +17,8 @@ Core requirements:
   do not claim the terminal process has read or completed the prompt.
 - Audit records must include operation, target session/pane, status, timestamp,
   and receipt ID, with redaction hooks for prompt bodies.
+- Goal/task context must use portable schemas and optional adapters; private
+  task systems must not be required for core Mosaic control commands.
 - Upstream sync must keep Zellij attribution and MIT notices intact.
 
 The first native surface is the `mosaic` binary, documented in
@@ -26,6 +28,7 @@ The first native surface is the `mosaic` binary, documented in
 `docs/MIGRATION.md`, with an agent-focused tmux comparison in
 `docs/TMUX_FOR_AGENTS.md`. Optional dispatch backend guidance is in
 `docs/DISPATCH_INTEGRATION.md`. Optional machine and transport registries are
-documented in `docs/MOSAIC_MACHINES.md`. Existing Zellij-derived crate and
-runtime names are implementation compatibility unless the relevant document says
-otherwise.
+documented in `docs/MOSAIC_MACHINES.md`. Portable goal/task registries and the
+optional external todos adapter are documented in `docs/MOSAIC_GOALS.md`.
+Existing Zellij-derived crate and runtime names are implementation
+compatibility unless the relevant document says otherwise.

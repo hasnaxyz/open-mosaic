@@ -29,6 +29,8 @@ use zellij_utils::{
 mod mosaic_adapters;
 #[path = "mosaic/agent.rs"]
 mod mosaic_agent;
+#[path = "mosaic/goals.rs"]
+mod mosaic_goals;
 #[path = "mosaic/machines.rs"]
 mod mosaic_machines;
 
@@ -104,6 +106,11 @@ enum MosaicCommand {
     Machines {
         #[clap(subcommand)]
         command: MachineCommand,
+    },
+    /// Inspect generic goals/tasks and optional task-system adapters.
+    Goals {
+        #[clap(subcommand)]
+        command: GoalsCommand,
     },
     /// Capture structured pane observations.
     Observe {
@@ -247,6 +254,16 @@ enum MachineCommand {
 }
 
 #[derive(Subcommand, Debug)]
+enum GoalsCommand {
+    /// List a portable goals/tasks registry.
+    List(GoalsListArgs),
+    /// Validate a portable goals/tasks registry.
+    Validate(GoalsValidateArgs),
+    /// Import one plan from the optional external todos CLI.
+    TodosPlan(GoalsTodosPlanArgs),
+}
+
+#[derive(Subcommand, Debug)]
 enum ObserveCommand {
     /// Capture a structured snapshot of one pane.
     Pane(ObservePaneArgs),
@@ -307,6 +324,45 @@ struct MachineExecArgs {
     /// Mosaic command to run on the target machine, for example: -- sessions list
     #[clap(last = true, required = true)]
     command: Vec<String>,
+}
+
+#[derive(Parser, Debug)]
+struct GoalsListArgs {
+    /// Optional goals registry JSON file. Defaults to XDG config if present.
+    #[clap(long)]
+    file: Option<PathBuf>,
+    /// Maximum summary task records to include.
+    #[clap(long, default_value = "10")]
+    limit: usize,
+    /// Redact task titles, descriptions, links, and local paths.
+    #[clap(long)]
+    redact: bool,
+}
+
+#[derive(Parser, Debug)]
+struct GoalsValidateArgs {
+    /// Path to a Mosaic goals registry JSON file.
+    #[clap(long)]
+    file: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+struct GoalsTodosPlanArgs {
+    /// Project path passed to the external todos CLI.
+    #[clap(long)]
+    project: PathBuf,
+    /// todos plan ID to import.
+    #[clap(long)]
+    plan: String,
+    /// External todos binary to run when this adapter is explicitly invoked.
+    #[clap(long, default_value = "todos")]
+    todos_bin: String,
+    /// Maximum summary task records to include.
+    #[clap(long, default_value = "10")]
+    limit: usize,
+    /// Redact task titles, descriptions, links, and local paths in output.
+    #[clap(long)]
+    redact: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -399,6 +455,9 @@ struct DashboardArgs {
     /// Include queued prompt bodies. Prompts are redacted by default.
     #[clap(long)]
     show_prompts: bool,
+    /// Optional goals registry JSON file. Defaults to XDG config if present.
+    #[clap(long)]
+    goals_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, ArgEnum)]
@@ -578,6 +637,7 @@ fn run(cli: MosaicCli) -> Result<u8, MosaicError> {
         MosaicCommand::Audit { command } => run_audit(command),
         MosaicCommand::Adapters { command } => run_adapters(command),
         MosaicCommand::Machines { command } => run_machines(command, cli.dry_run),
+        MosaicCommand::Goals { command } => run_goals(command, cli.dry_run),
         MosaicCommand::Observe { command } => {
             let session = resolve_session(cli.session)?;
             run_observe(&session, command)
@@ -670,6 +730,244 @@ fn normalize_adapter_kind(kind: &str) -> Result<String, MosaicError> {
             ),
         ))
     }
+}
+
+fn run_goals(command: GoalsCommand, dry_run: bool) -> Result<u8, MosaicError> {
+    match command {
+        GoalsCommand::List(args) => {
+            let (mut registry, mut source) = load_goals_registry(args.file.as_deref())?;
+            let summary = mosaic_goals::summarize_registry(&registry, args.limit, args.redact);
+            if args.redact {
+                mosaic_goals::redact_registry(&mut registry);
+                redact_dashboard_source(&mut source);
+            }
+            print_value(json!({
+                "schema_version": SCHEMA_VERSION,
+                "event": "goals.list",
+                "goal_schema_version": mosaic_goals::GOALS_SCHEMA_VERSION,
+                "timestamp_ms": now_millis(),
+                "source": source,
+                "summary": summary,
+                "data": registry,
+            }))?;
+            Ok(0)
+        },
+        GoalsCommand::Validate(args) => {
+            let registry = read_goals_registry(&args.file)?;
+            print_value(json!({
+                "schema_version": SCHEMA_VERSION,
+                "event": "goals.validate",
+                "goal_schema_version": mosaic_goals::GOALS_SCHEMA_VERSION,
+                "timestamp_ms": now_millis(),
+                "valid": true,
+                "registry": registry,
+            }))?;
+            Ok(0)
+        },
+        GoalsCommand::TodosPlan(args) => run_goals_todos_plan(args, dry_run),
+    }
+}
+
+fn run_goals_todos_plan(args: GoalsTodosPlanArgs, dry_run: bool) -> Result<u8, MosaicError> {
+    let plan = mosaic_goals::build_todos_command_plan(&args.todos_bin, &args.project, &args.plan)
+        .map_err(|e| MosaicError::new("invalid_goals_todos_command", e))?;
+    let id = format!("mosaic-goals-{}-{}", std::process::id(), now_millis());
+    if dry_run {
+        let event = goals_todos_event(
+            &id,
+            "dry_run",
+            "none",
+            None,
+            None,
+            &plan,
+            args.redact,
+            None,
+            None,
+        );
+        audit(&goals_todos_audit_record(
+            &id, "dry_run", "none", None, None, &plan, None,
+        ));
+        print_value(event)?;
+        return Ok(0);
+    }
+
+    let output = Command::new(&plan.program)
+        .args(&plan.args)
+        .output()
+        .map_err(|e| {
+            let message = if args.redact {
+                format!("failed to spawn goals adapter: {e}")
+            } else {
+                format!("failed to spawn {}: {e}", plan.program)
+            };
+            MosaicError::new("goals_todos_failed", message)
+        })?;
+    let exit_code = output.status.code().unwrap_or(1) as u8;
+    if !output.status.success() {
+        let error = Some(format!("todos command exited with status {exit_code}"));
+        let mut event = goals_todos_event(
+            &id,
+            "error",
+            "process_exited",
+            Some(exit_code),
+            error.clone(),
+            &plan,
+            true,
+            None,
+            None,
+        );
+        event["stderr"] = if args.redact {
+            json!("[redacted]")
+        } else {
+            json!(String::from_utf8_lossy(&output.stderr).to_string())
+        };
+        audit(&goals_todos_audit_record(
+            &id,
+            "error",
+            "process_exited",
+            Some(exit_code),
+            error,
+            &plan,
+            None,
+        ));
+        print_value(event)?;
+        return Ok(exit_code);
+    }
+
+    let todos_json = serde_json::from_slice::<Value>(&output.stdout).map_err(|e| {
+        MosaicError::new(
+            "invalid_goals_todos_json",
+            format!("todos output was not valid JSON: {e}"),
+        )
+    })?;
+    let mut registry = mosaic_goals::registry_from_todos_plan(&todos_json, &args.project)
+        .map_err(|e| MosaicError::new("invalid_goals_todos_data", e))?;
+    let summary = mosaic_goals::summarize_registry(&registry, args.limit, args.redact);
+    let audit_summary = mosaic_goals::summarize_registry(&registry, 0, true);
+    if args.redact {
+        mosaic_goals::redact_registry(&mut registry);
+    }
+    let event = goals_todos_event(
+        &id,
+        "completed",
+        "process_exited",
+        Some(exit_code),
+        None,
+        &plan,
+        args.redact,
+        Some(summary),
+        Some(registry),
+    );
+    audit(&goals_todos_audit_record(
+        &id,
+        "completed",
+        "process_exited",
+        Some(exit_code),
+        None,
+        &plan,
+        Some(audit_summary),
+    ));
+    print_value(event)?;
+    Ok(0)
+}
+
+fn load_goals_registry(requested_path: Option<&Path>) -> Result<(Value, Value), MosaicError> {
+    let path = requested_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(mosaic_goals::default_config_path);
+    if requested_path.is_none() && !path.exists() {
+        return Ok((
+            mosaic_goals::empty_registry(),
+            json!({
+                "path": path.display().to_string(),
+                "loaded": false,
+                "missing": true,
+            }),
+        ));
+    }
+    let registry = read_goals_registry(&path)?;
+    Ok((
+        registry,
+        json!({
+            "path": path.display().to_string(),
+            "loaded": true,
+        }),
+    ))
+}
+
+fn read_goals_registry(path: &Path) -> Result<Value, MosaicError> {
+    let raw = fs::read_to_string(path).map_err(|e| {
+        MosaicError::new(
+            "goals_registry_read_failed",
+            format!("failed to read {}: {e}", path.display()),
+        )
+    })?;
+    let value = serde_json::from_str::<Value>(&raw).map_err(|e| {
+        MosaicError::new(
+            "invalid_goals_registry_json",
+            format!("{}: {e}", path.display()),
+        )
+    })?;
+    mosaic_goals::normalize_registry_input(value)
+        .map_err(|e| MosaicError::new("invalid_goals_registry", format!("{}: {e}", path.display())))
+}
+
+fn goals_todos_event(
+    id: &str,
+    status: &str,
+    ack: &str,
+    exit_code: Option<u8>,
+    error: Option<String>,
+    plan: &mosaic_goals::TodosCommandPlan,
+    redact_command: bool,
+    summary: Option<Value>,
+    data: Option<Value>,
+) -> Value {
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "event": "goals.todos_plan",
+        "goal_schema_version": mosaic_goals::GOALS_SCHEMA_VERSION,
+        "id": id,
+        "operation": "goals.todos_plan",
+        "adapter": "todos",
+        "status": status,
+        "ack": ack,
+        "timestamp_ms": now_millis(),
+        "exit_code": exit_code,
+        "error": error,
+        "command": if redact_command {
+            mosaic_goals::redact_todos_command_plan(plan)
+        } else {
+            plan.to_json()
+        },
+        "summary": summary,
+        "data": data,
+    })
+}
+
+fn goals_todos_audit_record(
+    id: &str,
+    status: &str,
+    ack: &str,
+    exit_code: Option<u8>,
+    error: Option<String>,
+    plan: &mosaic_goals::TodosCommandPlan,
+    summary: Option<Value>,
+) -> Value {
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "event": "receipt",
+        "id": id,
+        "operation": "goals.todos_plan",
+        "adapter": "todos",
+        "status": status,
+        "ack": ack,
+        "timestamp_ms": now_millis(),
+        "exit_code": exit_code,
+        "error": error,
+        "command": mosaic_goals::redact_todos_command_plan(plan),
+        "summary": summary,
+    })
 }
 
 fn run_machines(command: MachineCommand, dry_run: bool) -> Result<u8, MosaicError> {
@@ -1085,60 +1383,106 @@ fn build_dashboard_snapshot(
     args: DashboardArgs,
 ) -> Result<Value, MosaicError> {
     let sessions = list_sessions_values()?;
-    let mut queue_records = read_queue_records(requested_session.as_deref(), None)?;
-    sort_values_by_timestamp(&mut queue_records);
-    let show_prompt_bodies = args.show_prompts && !args.redact;
-    let queue_summary = summarize_queue_records(&queue_records, args.limit, show_prompt_bodies);
+    let mut partial = false;
+    let mut errors = Vec::new();
 
-    let mut audit_records = read_ndjson_file(&audit_path())?;
-    if let Some(session) = requested_session.as_deref() {
-        audit_records.retain(|record| record_matches_session(record, session));
-    }
-    sort_values_by_timestamp(&mut audit_records);
-    let mut audit_summary = summarize_audit_records(&audit_records, args.limit);
+    let show_prompt_bodies = args.show_prompts && !args.redact;
+    let queue_summary = match read_queue_records(requested_session.as_deref(), None) {
+        Ok(mut queue_records) => {
+            sort_values_by_timestamp(&mut queue_records);
+            summarize_queue_records(&queue_records, args.limit, show_prompt_bodies)
+        },
+        Err(error) => {
+            let section_error = dashboard_section_error("queues", &error);
+            partial = true;
+            errors.push(section_error);
+            summarize_queue_records(&[], args.limit, false)
+        },
+    };
+
+    let mut audit_summary = match read_ndjson_file(&audit_path()) {
+        Ok(mut audit_records) => {
+            if let Some(session) = requested_session.as_deref() {
+                audit_records.retain(|record| record_matches_session(record, session));
+            }
+            sort_values_by_timestamp(&mut audit_records);
+            summarize_audit_records(&audit_records, args.limit)
+        },
+        Err(error) => {
+            let section_error = dashboard_section_error("audit", &error);
+            partial = true;
+            errors.push(section_error);
+            summarize_audit_records(&[], args.limit)
+        },
+    };
     if !show_prompt_bodies {
         redact_prompt_value(&mut audit_summary);
     }
 
-    let (live, partial, errors) = if args.live {
+    let goals = match load_goals_registry(args.goals_file.as_deref()) {
+        Ok((registry, mut source)) => {
+            if args.redact {
+                redact_dashboard_source(&mut source);
+            }
+            let loaded = source
+                .get("loaded")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            json!({
+                "status": if loaded { "loaded" } else { "not_configured" },
+                "source": source,
+                "summary": mosaic_goals::summarize_registry(&registry, args.limit, args.redact),
+            })
+        },
+        Err(error) => {
+            let section_error = dashboard_section_error("goals", &error);
+            partial = true;
+            errors.push(section_error.clone());
+            json!({
+                "status": "error",
+                "error": section_error,
+                "summary": mosaic_goals::summarize_registry(
+                    &mosaic_goals::empty_registry(),
+                    args.limit,
+                    args.redact,
+                ),
+            })
+        },
+    };
+
+    let live = if args.live {
         match resolve_session(requested_session.clone())
             .and_then(|session| build_live_dashboard_snapshot(&session, args.redact))
         {
-            Ok(live) => (live, false, Vec::new()),
+            Ok(live) => live,
             Err(error) => {
                 let error = dashboard_section_error("live", &error);
-                (
-                    json!({
-                        "requested": true,
-                        "session": requested_session.clone(),
-                        "status": "error",
-                        "error": error.clone(),
-                        "agents": {
-                            "total": 0,
-                            "by_kind": [],
-                            "panes": []
-                        }
-                    }),
-                    true,
-                    vec![error],
-                )
+                partial = true;
+                errors.push(error.clone());
+                json!({
+                    "requested": true,
+                    "session": requested_session.clone(),
+                    "status": "error",
+                    "error": error.clone(),
+                    "agents": {
+                        "total": 0,
+                        "by_kind": [],
+                        "panes": []
+                    }
+                })
             },
         }
     } else {
-        (
-            json!({
-                "requested": false,
-                "session": requested_session.clone(),
-                "status": "not_requested",
-                "agents": {
-                    "total": 0,
-                    "by_kind": [],
-                    "panes": []
-                }
-            }),
-            false,
-            Vec::new(),
-        )
+        json!({
+            "requested": false,
+            "session": requested_session.clone(),
+            "status": "not_requested",
+            "agents": {
+                "total": 0,
+                "by_kind": [],
+                "panes": []
+            }
+        })
     };
 
     Ok(json!({
@@ -1152,6 +1496,7 @@ fn build_dashboard_snapshot(
         "sessions": sessions,
         "queues": queue_summary,
         "audit": audit_summary,
+        "goals": goals,
         "live": live,
     }))
 }
@@ -1162,6 +1507,14 @@ fn dashboard_section_error(section: &'static str, error: &MosaicError) -> Value 
         "code": error.code,
         "message": error.message,
     })
+}
+
+fn redact_dashboard_source(source: &mut Value) {
+    if let Value::Object(object) = source {
+        if object.contains_key("path") {
+            object.insert("path".to_owned(), json!("[redacted]"));
+        }
+    }
 }
 
 fn list_sessions_values() -> Result<Vec<Value>, MosaicError> {
@@ -1463,6 +1816,43 @@ fn write_dashboard_text(writer: &mut dyn Write, snapshot: &Value) -> io::Result<
             .and_then(Value::as_u64)
             .unwrap_or(0)
     )?;
+    let goals = &snapshot["goals"];
+    let goal_summary = &goals["summary"];
+    writeln!(
+        writer,
+        "Goals: {} goals, {} tasks ({})",
+        goal_summary
+            .get("total_goals")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        goal_summary
+            .get("total_tasks")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        dashboard_text_cell(
+            goals
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        )
+    )?;
+    for task in goal_summary
+        .get("active")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        writeln!(
+            writer,
+            "  {} [{}]",
+            dashboard_text_cell(task.get("id").and_then(Value::as_str).unwrap_or("unknown")),
+            dashboard_text_cell(
+                task.get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+            )
+        )?;
+    }
     let live = &snapshot["live"];
     writeln!(
         writer,

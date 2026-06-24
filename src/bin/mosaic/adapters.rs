@@ -4,6 +4,7 @@ pub const ADAPTER_SCHEMA_VERSION: &str = "mosaic.adapter.v1";
 
 const KNOWN_KINDS: &[&str] = &[
     "agent",
+    "goal_system",
     "project_registry",
     "task_system",
     "identity",
@@ -77,10 +78,33 @@ pub fn built_in_adapters() -> Vec<Value> {
             &["project.detect", "repo.metadata"],
         ),
         adapter(
+            "mosaic.goal.local",
+            "goal_system",
+            "Local goals/tasks registry contract",
+            &[
+                "goal.reference",
+                "goal.status",
+                "goal.context",
+                "task.reference",
+                "task.status",
+            ],
+        ),
+        adapter(
             "mosaic.task.local",
             "task_system",
             "Local task-system manifest contract",
             &["task.reference", "task.link_ref", "task.status"],
+        ),
+        adapter(
+            "mosaic.task.todos",
+            "task_system",
+            "Optional external todos CLI adapter contract",
+            &[
+                "goal.import.todos",
+                "task.import.todos",
+                "task.reference",
+                "task.status",
+            ],
         ),
         adapter(
             "mosaic.identity.local-user",

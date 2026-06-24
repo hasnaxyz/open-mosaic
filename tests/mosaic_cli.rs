@@ -16,6 +16,7 @@ fn mosaic_help_exposes_agentic_control_surface() {
     assert!(stdout.contains("audit"));
     assert!(stdout.contains("adapters"));
     assert!(stdout.contains("machines"));
+    assert!(stdout.contains("goals"));
     assert!(stdout.contains("observe"));
     assert!(stdout.contains("subscribe"));
     assert!(stdout.contains("dashboard"));
@@ -47,7 +48,7 @@ fn adapters_list_returns_portable_builtin_interfaces() {
 #[test]
 fn adapters_list_accepts_schema_kind_names() {
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
-        .args(["adapters", "list", "--kind", "project_registry"])
+        .args(["adapters", "list", "--kind", "goal_system"])
         .output()
         .expect("mosaic adapters list should run");
     assert!(output.status.success());
@@ -58,7 +59,7 @@ fn adapters_list_accepts_schema_kind_names() {
     assert!(!adapters.is_empty());
     assert!(adapters
         .iter()
-        .all(|adapter| adapter["kind"].as_str() == Some("project_registry")));
+        .all(|adapter| adapter["kind"].as_str() == Some("goal_system")));
 }
 
 #[test]
@@ -142,6 +143,246 @@ fn adapters_validate_rejects_invalid_manifests() {
     let error: Value =
         serde_json::from_str(String::from_utf8_lossy(&output.stderr).trim()).expect("error");
     assert_eq!(error["code"], "invalid_adapter_manifest");
+}
+
+fn goals_registry_json() -> Value {
+    json!({
+        "schema_version": "mosaic.goals.v1",
+        "source": {
+            "kind": "file",
+            "adapter": "generic",
+            "configured": true,
+            "project_path": "/private/project"
+        },
+        "goals": [
+            {
+                "id": "goal-1",
+                "title": "Secret launch goal",
+                "status": "active",
+                "description": "Ship privately"
+            }
+        ],
+        "tasks": [
+            {
+                "id": "task-1",
+                "goal_id": "goal-1",
+                "title": "Secret task title",
+                "description": "Sensitive task body",
+                "status": "in_progress",
+                "priority": "high",
+                "agent": "cli",
+                "blocked": false,
+                "tags": ["goals"]
+            },
+            {
+                "id": "task-2",
+                "goal_id": "goal-1",
+                "title": "Blocked task",
+                "status": "blocked",
+                "blocked": true
+            }
+        ]
+    })
+}
+
+#[test]
+fn goals_list_without_config_returns_empty_portable_registry() {
+    let config_dir = tempdir().expect("config tempdir");
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args(["goals", "list"])
+        .output()
+        .expect("mosaic goals list should run");
+    assert!(output.status.success());
+
+    let envelope: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("goals list");
+    assert_eq!(envelope["schema_version"], "mosaic.control.v1");
+    assert_eq!(envelope["event"], "goals.list");
+    assert_eq!(envelope["goal_schema_version"], "mosaic.goals.v1");
+    assert_eq!(envelope["source"]["loaded"], false);
+    assert_eq!(envelope["source"]["missing"], true);
+    assert_eq!(envelope["summary"]["configured"], false);
+    assert_eq!(envelope["summary"]["total_tasks"], 0);
+}
+
+#[test]
+fn goals_validate_accepts_portable_registry() {
+    let temp = tempdir().expect("goals tempdir");
+    let registry_path = temp.path().join("goals.json");
+    fs::write(&registry_path, goals_registry_json().to_string()).expect("write registry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "goals",
+            "validate",
+            "--file",
+            registry_path.to_str().expect("registry path"),
+        ])
+        .output()
+        .expect("mosaic goals validate should run");
+    assert!(output.status.success());
+
+    let envelope: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("validation");
+    assert_eq!(envelope["event"], "goals.validate");
+    assert_eq!(envelope["valid"], true);
+    assert_eq!(envelope["registry"]["schema_version"], "mosaic.goals.v1");
+}
+
+#[test]
+fn goals_validate_rejects_duplicate_task_ids() {
+    let temp = tempdir().expect("goals tempdir");
+    let registry_path = temp.path().join("goals.json");
+    let mut registry = goals_registry_json();
+    registry["tasks"][1]["id"] = json!("task-1");
+    fs::write(&registry_path, registry.to_string()).expect("write registry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "goals",
+            "validate",
+            "--file",
+            registry_path.to_str().expect("registry path"),
+        ])
+        .output()
+        .expect("mosaic goals validate should run");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let error: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stderr).trim()).expect("error");
+    assert_eq!(error["code"], "invalid_goals_registry");
+}
+
+#[test]
+fn goals_list_redacts_titles_descriptions_and_paths() {
+    let temp = tempdir().expect("goals tempdir");
+    let registry_path = temp.path().join("goals.json");
+    fs::write(&registry_path, goals_registry_json().to_string()).expect("write registry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "goals",
+            "list",
+            "--file",
+            registry_path.to_str().expect("registry path"),
+            "--redact",
+        ])
+        .output()
+        .expect("mosaic goals list should run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Secret"));
+    assert!(!stdout.contains("Sensitive"));
+    assert!(!stdout.contains("/private/project"));
+    assert!(!stdout.contains(registry_path.to_str().expect("registry path")));
+    let envelope: Value = serde_json::from_str(stdout.trim()).expect("goals list");
+    assert_eq!(envelope["data"]["tasks"][0]["title"], "[redacted]");
+    assert_eq!(envelope["summary"]["active"][0]["title"], "[redacted]");
+    assert_eq!(envelope["summary"]["blocked_tasks"], 1);
+}
+
+#[test]
+fn goals_todos_plan_dry_run_redacts_project_path() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "--dry-run",
+            "goals",
+            "todos-plan",
+            "--project",
+            "/private/project",
+            "--plan",
+            "plan-1",
+            "--todos-bin",
+            "/private/bin/todos",
+            "--redact",
+        ])
+        .output()
+        .expect("mosaic goals todos dry-run should run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("/private/project"));
+    assert!(!stdout.contains("/private/bin/todos"));
+    let envelope: Value = serde_json::from_str(stdout.trim()).expect("todos dry-run");
+    assert_eq!(envelope["event"], "goals.todos_plan");
+    assert_eq!(envelope["status"], "dry_run");
+    assert!(envelope["command"]["argv"]
+        .as_array()
+        .expect("argv")
+        .iter()
+        .any(|segment| segment.as_str() == Some("[redacted]")));
+}
+
+#[test]
+fn goals_todos_plan_spawn_error_honors_redaction() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "goals",
+            "todos-plan",
+            "--project",
+            "/private/project",
+            "--plan",
+            "plan-1",
+            "--todos-bin",
+            "/private/bin/missing-todos",
+            "--redact",
+        ])
+        .output()
+        .expect("mosaic goals todos spawn should run");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("/private/project"));
+    assert!(!stderr.contains("/private/bin/missing-todos"));
+    let error: Value = serde_json::from_str(stderr.trim()).expect("error");
+    assert_eq!(error["code"], "goals_todos_failed");
+}
+
+#[cfg(unix)]
+#[test]
+fn goals_todos_plan_imports_external_todos_json() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().expect("todos tempdir");
+    let todos_bin = temp.path().join("fake-todos");
+    fs::write(
+        &todos_bin,
+        r#"#!/bin/sh
+cat <<'JSON'
+{"plan":{"id":"plan-1","name":"Portable plan","description":"Use adapter","status":"active"},"tasks":[{"id":"task-1","title":"Adapter task","description":"Run import","status":"in_progress","priority":"medium","assigned_to":"cli","tags":["adapter"]}]}
+JSON
+"#,
+    )
+    .expect("write fake todos");
+    let mut permissions = fs::metadata(&todos_bin)
+        .expect("fake todos metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&todos_bin, permissions).expect("chmod fake todos");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "goals",
+            "todos-plan",
+            "--project",
+            temp.path().to_str().expect("project path"),
+            "--plan",
+            "plan-1",
+            "--todos-bin",
+            todos_bin.to_str().expect("todos path"),
+        ])
+        .output()
+        .expect("mosaic goals todos import should run");
+    assert!(output.status.success());
+
+    let envelope: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("todos import");
+    assert_eq!(envelope["event"], "goals.todos_plan");
+    assert_eq!(envelope["status"], "completed");
+    assert_eq!(envelope["data"]["schema_version"], "mosaic.goals.v1");
+    assert_eq!(envelope["data"]["source"]["adapter"], "todos");
+    assert_eq!(envelope["data"]["goals"][0]["title"], "Portable plan");
+    assert_eq!(envelope["summary"]["active_tasks"], 1);
 }
 
 fn machine_registry_json() -> Value {
@@ -1048,8 +1289,10 @@ fn runtime_errors_are_machine_readable_json() {
 #[test]
 fn dashboard_json_summarizes_local_queues_with_prompt_redaction_by_default() {
     let state_dir = tempdir().expect("state tempdir");
+    let config_dir = tempdir().expect("config tempdir");
     let queued = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
             "--session",
             "dashboard-session",
@@ -1067,6 +1310,7 @@ fn dashboard_json_summarizes_local_queues_with_prompt_redaction_by_default() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .args(["dashboard", "--limit", "5"])
         .output()
         .expect("dashboard");
@@ -1088,10 +1332,126 @@ fn dashboard_json_summarizes_local_queues_with_prompt_redaction_by_default() {
 }
 
 #[test]
-fn dashboard_live_missing_session_returns_partial_snapshot() {
+fn dashboard_json_includes_optional_goals_registry_with_redaction() {
     let state_dir = tempdir().expect("state tempdir");
+    let config_dir = tempdir().expect("config tempdir");
+    let registry_path = config_dir.path().join("goals.json");
+    fs::write(&registry_path, goals_registry_json().to_string()).expect("write registry");
+
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .env("XDG_STATE_HOME", state_dir.path())
+        .args([
+            "dashboard",
+            "--goals-file",
+            registry_path.to_str().expect("registry path"),
+            "--redact",
+        ])
+        .output()
+        .expect("dashboard");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Secret"));
+    assert!(!stdout.contains("/private/project"));
+    let dashboard: Value = serde_json::from_str(stdout.trim()).expect("dashboard json");
+    assert_eq!(dashboard["goals"]["status"], "loaded");
+    assert_eq!(dashboard["goals"]["summary"]["total_goals"], 1);
+    assert_eq!(dashboard["goals"]["summary"]["total_tasks"], 2);
+    assert_eq!(dashboard["goals"]["summary"]["active_tasks"], 1);
+    assert_eq!(
+        dashboard["goals"]["summary"]["active"][0]["title"],
+        "[redacted]"
+    );
+}
+
+#[test]
+fn dashboard_invalid_goals_registry_returns_partial_snapshot() {
+    let state_dir = tempdir().expect("state tempdir");
+    let config_dir = tempdir().expect("config tempdir");
+    let registry_path = config_dir.path().join("goals.json");
+    fs::write(&registry_path, "{\"schema_version\":\"bad\"}").expect("write registry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args([
+            "dashboard",
+            "--goals-file",
+            registry_path.to_str().expect("registry path"),
+        ])
+        .output()
+        .expect("dashboard");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let dashboard: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("dashboard");
+    assert_eq!(dashboard["partial"], true);
+    assert_eq!(dashboard["errors"][0]["section"], "goals");
+    assert_eq!(dashboard["goals"]["status"], "error");
+    assert_eq!(dashboard["queues"]["total_pending"], 0);
+}
+
+#[test]
+fn dashboard_invalid_audit_state_returns_partial_snapshot() {
+    let state_dir = tempdir().expect("state tempdir");
+    let config_dir = tempdir().expect("config tempdir");
+    let mosaic_state = state_dir.path().join("open-mosaic");
+    fs::create_dir_all(&mosaic_state).expect("state dir");
+    fs::write(mosaic_state.join("audit.ndjson"), "{not-json}\n").expect("audit");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args(["dashboard"])
+        .output()
+        .expect("dashboard");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let dashboard: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("dashboard");
+    assert_eq!(dashboard["partial"], true);
+    assert_eq!(dashboard["errors"][0]["section"], "audit");
+    assert_eq!(dashboard["audit"]["total_records"], 0);
+    assert_eq!(dashboard["queues"]["total_pending"], 0);
+}
+
+#[test]
+fn dashboard_invalid_queue_state_returns_partial_snapshot() {
+    let state_dir = tempdir().expect("state tempdir");
+    let config_dir = tempdir().expect("config tempdir");
+    let queue_dir = state_dir
+        .path()
+        .join("open-mosaic")
+        .join("queues")
+        .join("bad-session");
+    fs::create_dir_all(&queue_dir).expect("queue dir");
+    fs::write(queue_dir.join("terminal_1.ndjson"), "{not-json}\n").expect("queue");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .args(["dashboard"])
+        .output()
+        .expect("dashboard");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let dashboard: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("dashboard");
+    assert_eq!(dashboard["partial"], true);
+    assert_eq!(dashboard["errors"][0]["section"], "queues");
+    assert_eq!(dashboard["queues"]["total_pending"], 0);
+    assert_eq!(dashboard["audit"]["total_records"], 0);
+}
+
+#[test]
+fn dashboard_live_missing_session_returns_partial_snapshot() {
+    let state_dir = tempdir().expect("state tempdir");
+    let config_dir = tempdir().expect("config tempdir");
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
             "--session",
             "missing-dashboard-live-session",
@@ -1116,8 +1476,10 @@ fn dashboard_live_missing_session_returns_partial_snapshot() {
 #[test]
 fn dashboard_prompt_bodies_require_explicit_opt_in_and_redact_wins() {
     let state_dir = tempdir().expect("state tempdir");
+    let config_dir = tempdir().expect("config tempdir");
     let queued = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
             "--session",
             "dashboard-session",
@@ -1135,6 +1497,7 @@ fn dashboard_prompt_bodies_require_explicit_opt_in_and_redact_wins() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .args(["dashboard", "--show-prompts"])
         .output()
         .expect("dashboard with prompts");
@@ -1144,6 +1507,7 @@ fn dashboard_prompt_bodies_require_explicit_opt_in_and_redact_wins() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .args(["dashboard", "--show-prompts", "--redact"])
         .output()
         .expect("redacted dashboard");
@@ -1157,8 +1521,10 @@ fn dashboard_prompt_bodies_require_explicit_opt_in_and_redact_wins() {
 #[test]
 fn dashboard_text_is_compact_and_redacted() {
     let state_dir = tempdir().expect("state tempdir");
+    let config_dir = tempdir().expect("config tempdir");
     let queued = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
             "--session",
             "dashboard-session",
@@ -1176,6 +1542,7 @@ fn dashboard_text_is_compact_and_redacted() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .args(["dashboard", "--format", "text"])
         .output()
         .expect("dashboard text");
@@ -1184,6 +1551,7 @@ fn dashboard_text_is_compact_and_redacted() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Open Mosaic Dashboard"));
     assert!(stdout.contains("Queues: 1 pending (redacted)"));
+    assert!(stdout.contains("Goals: 0 goals, 0 tasks (not_configured)"));
     assert!(stdout.contains("Live: not_requested"));
     assert!(stdout.contains("Agent Metadata: 0 panes"));
     assert!(!stdout.contains("text dashboard secret"));
@@ -1192,9 +1560,11 @@ fn dashboard_text_is_compact_and_redacted() {
 #[test]
 fn dashboard_text_sanitizes_control_sequences_from_state() {
     let state_dir = tempdir().expect("state tempdir");
+    let config_dir = tempdir().expect("config tempdir");
     let unsafe_session = "bad\n\x1b]0;pwned\x07";
     let queued = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .args([
             "--session",
             unsafe_session,
@@ -1212,6 +1582,7 @@ fn dashboard_text_sanitizes_control_sequences_from_state() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
         .env("XDG_STATE_HOME", state_dir.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
         .args(["dashboard", "--format", "text"])
         .output()
         .expect("dashboard text");
