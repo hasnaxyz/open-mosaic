@@ -28,6 +28,7 @@ include = [
   "docs/RELEASE.md",
   "docs/TMUX_FOR_AGENTS.md",
   "docs/UPSTREAM_MAINTENANCE.md",
+  "docs/ZELLIJ_ARCHITECTURE_AUDIT.md",
   "!**/*_test.*",
   "!**/tests/**/*"
 ]
@@ -186,6 +187,7 @@ assets = [
   ["docs/RELEASE.md", "usr/share/doc/open-mosaic/RELEASE.md", "644"],
   ["docs/TMUX_FOR_AGENTS.md", "usr/share/doc/open-mosaic/TMUX_FOR_AGENTS.md", "644"],
   ["docs/UPSTREAM_MAINTENANCE.md", "usr/share/doc/open-mosaic/UPSTREAM_MAINTENANCE.md", "644"],
+  ["docs/ZELLIJ_ARCHITECTURE_AUDIT.md", "usr/share/doc/open-mosaic/ZELLIJ_ARCHITECTURE_AUDIT.md", "644"],
   ["README.md", "usr/share/doc/open-mosaic/README.md", "644"],
   ["assets/layouts/*", "usr/share/zellij/layouts/", "644"],
   ["assets/plugins/*", "usr/share/zellij/plugins/", "644"],

@@ -56,6 +56,7 @@ require_deb_doc_asset() {
 require_file LICENSE.md
 require_file NOTICE.md
 require_file docs/UPSTREAM_MAINTENANCE.md
+require_file docs/ZELLIJ_ARCHITECTURE_AUDIT.md
 require_file docs/RELEASE.md
 
 require_contains LICENSE.md 'Copyright \(c\) 2020 Zellij contributors' \
@@ -72,6 +73,10 @@ require_contains docs/UPSTREAM_MAINTENANCE.md 'git remote set-url --push upstrea
   "upstream maintenance guide documents disabled upstream push URL"
 require_contains docs/UPSTREAM_MAINTENANCE.md 'scripts/check-upstream-hygiene.sh' \
   "upstream maintenance guide references this check"
+require_contains docs/ZELLIJ_ARCHITECTURE_AUDIT.md 'src/bin/mosaic.rs' \
+  "architecture audit documents the Mosaic native CLI boundary"
+require_contains docs/ZELLIJ_ARCHITECTURE_AUDIT.md 'zellij-org/zellij' \
+  "architecture audit names upstream Zellij"
 
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   upstream_url=$(git remote get-url upstream 2>/dev/null || true)
@@ -102,6 +107,7 @@ for path in \
   docs/RELEASE.md \
   docs/OPEN_MOSAIC.md \
   docs/MOSAIC_SCHEMAS.md \
+  docs/ZELLIJ_ARCHITECTURE_AUDIT.md \
   NOTICE.md
 do
   require_cargo_include "$path"

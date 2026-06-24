@@ -4,6 +4,9 @@ Open Mosaic is a derivative of Zellij. Upstream sync work should make it easy
 to accept Zellij fixes while keeping Open Mosaic-specific agent surfaces clear,
 portable, and accurately attributed.
 
+Architecture boundaries and fork-base decisions are recorded in
+`docs/ZELLIJ_ARCHITECTURE_AUDIT.md`.
+
 ## Ground Rules
 
 - Keep `upstream` as a fetch-only remote for `zellij-org/zellij`.
@@ -87,6 +90,7 @@ Review these files and areas carefully during every upstream sync:
 - `docs/GETTING_STARTED.md`
 - `docs/MOSAIC_*.md`
 - `docs/UPSTREAM_MAINTENANCE.md`
+- `docs/ZELLIJ_ARCHITECTURE_AUDIT.md`
 - `scripts/check-upstream-hygiene.sh`
 
 If upstream changes licensing, authorship, release metadata, web sharing, IPC,
