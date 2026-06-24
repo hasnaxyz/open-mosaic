@@ -20,5 +20,6 @@ Core requirements:
 - Upstream sync must keep Zellij attribution and MIT notices intact.
 
 The first native surface is the `mosaic` binary, documented in
-`docs/MOSAIC_CLI.md`. Existing Zellij-derived crate and runtime names are
+`docs/MOSAIC_CLI.md`. Portable adapter manifests are documented in
+`docs/MOSAIC_ADAPTERS.md`. Existing Zellij-derived crate and runtime names are
 implementation compatibility unless the relevant document says otherwise.

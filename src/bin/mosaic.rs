@@ -24,6 +24,8 @@ use zellij_utils::{
     sessions::{get_active_session, get_sessions, ActiveSession},
 };
 
+#[path = "mosaic/adapters.rs"]
+mod mosaic_adapters;
 #[path = "mosaic/agent.rs"]
 mod mosaic_agent;
 
@@ -89,6 +91,11 @@ enum MosaicCommand {
     Audit {
         #[clap(subcommand)]
         command: AuditCommand,
+    },
+    /// List and validate portable adapter manifests.
+    Adapters {
+        #[clap(subcommand)]
+        command: AdapterCommand,
     },
     /// Capture structured pane observations.
     Observe {
@@ -210,6 +217,14 @@ enum AuditCommand {
 }
 
 #[derive(Subcommand, Debug)]
+enum AdapterCommand {
+    /// List built-in portable adapter interface descriptors.
+    List(AdapterListArgs),
+    /// Validate a Mosaic adapter manifest without executing it.
+    Validate(AdapterValidateArgs),
+}
+
+#[derive(Subcommand, Debug)]
 enum ObserveCommand {
     /// Capture a structured snapshot of one pane.
     Pane(ObservePaneArgs),
@@ -223,6 +238,20 @@ struct AuditListArgs {
     /// Redact prompt bodies if present in future audit records.
     #[clap(long)]
     redact: bool,
+}
+
+#[derive(Parser, Debug)]
+struct AdapterListArgs {
+    /// Optional adapter kind filter.
+    #[clap(long)]
+    kind: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+struct AdapterValidateArgs {
+    /// Path to a JSON adapter manifest.
+    #[clap(long)]
+    file: PathBuf,
 }
 
 #[derive(Parser, Debug)]
@@ -467,6 +496,7 @@ fn run(cli: MosaicCli) -> Result<u8, MosaicError> {
         },
         MosaicCommand::Queue { command } => run_queue(command, cli.session, cli.dry_run),
         MosaicCommand::Audit { command } => run_audit(command),
+        MosaicCommand::Adapters { command } => run_adapters(command),
         MosaicCommand::Observe { command } => {
             let session = resolve_session(cli.session)?;
             run_observe(&session, command)
@@ -491,6 +521,72 @@ fn run(cli: MosaicCli) -> Result<u8, MosaicError> {
             let session = resolve_session(cli.session)?;
             run_subscribe(&session, args)
         },
+    }
+}
+
+fn run_adapters(command: AdapterCommand) -> Result<u8, MosaicError> {
+    match command {
+        AdapterCommand::List(args) => {
+            let mut adapters = mosaic_adapters::built_in_adapters();
+            if let Some(kind) = args.kind {
+                let kind = normalize_adapter_kind(&kind)?;
+                adapters
+                    .retain(|adapter| adapter.get("kind").and_then(Value::as_str) == Some(&kind));
+            }
+            print_value(json!({
+                "schema_version": SCHEMA_VERSION,
+                "event": "adapters.list",
+                "adapter_schema_version": mosaic_adapters::ADAPTER_SCHEMA_VERSION,
+                "timestamp_ms": now_millis(),
+                "known_kinds": mosaic_adapters::known_kinds(),
+                "data": adapters,
+            }))?;
+            Ok(0)
+        },
+        AdapterCommand::Validate(args) => {
+            let raw = fs::read_to_string(&args.file).map_err(|e| {
+                MosaicError::new(
+                    "adapter_manifest_read_failed",
+                    format!("failed to read {}: {e}", args.file.display()),
+                )
+            })?;
+            let manifest = serde_json::from_str::<Value>(&raw).map_err(|e| {
+                MosaicError::new(
+                    "invalid_adapter_manifest_json",
+                    format!("{}: {e}", args.file.display()),
+                )
+            })?;
+            mosaic_adapters::validate_adapter_manifest(&manifest).map_err(|e| {
+                MosaicError::new(
+                    "invalid_adapter_manifest",
+                    format!("{}: {e}", args.file.display()),
+                )
+            })?;
+            print_value(json!({
+                "schema_version": SCHEMA_VERSION,
+                "event": "adapters.validate",
+                "adapter_schema_version": mosaic_adapters::ADAPTER_SCHEMA_VERSION,
+                "timestamp_ms": now_millis(),
+                "valid": true,
+                "adapter": manifest,
+            }))?;
+            Ok(0)
+        },
+    }
+}
+
+fn normalize_adapter_kind(kind: &str) -> Result<String, MosaicError> {
+    let normalized = kind.trim().replace('-', "_");
+    if mosaic_adapters::known_kinds().contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(MosaicError::new(
+            "invalid_adapter_kind",
+            format!(
+                "adapter kind must be one of {}, got {kind:?}",
+                mosaic_adapters::known_kinds().join(", ")
+            ),
+        ))
     }
 }
 

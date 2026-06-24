@@ -132,6 +132,19 @@ mosaic audit list --redact
 records are local observer data; consumers should treat them as append-only
 evidence, not as proof that a terminal process consumed a prompt.
 
+## Adapters
+
+```sh
+mosaic adapters list
+mosaic adapters list --kind agent
+mosaic adapters validate --file adapter.json
+```
+
+`adapters list` returns built-in portable adapter interface descriptors using
+`adapter_schema_version: "mosaic.adapter.v1"`. `adapters validate` validates a
+manifest file without executing it. See `docs/MOSAIC_ADAPTERS.md` for the
+manifest schema, supported kinds, and capability names.
+
 ## Observation
 
 ```sh

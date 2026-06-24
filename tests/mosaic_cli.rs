@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{fs, process::Command, thread};
 use tempfile::tempdir;
 
@@ -14,8 +14,132 @@ fn mosaic_help_exposes_agentic_control_surface() {
     assert!(stdout.contains("prompt"));
     assert!(stdout.contains("queue"));
     assert!(stdout.contains("audit"));
+    assert!(stdout.contains("adapters"));
     assert!(stdout.contains("observe"));
     assert!(stdout.contains("subscribe"));
+}
+
+#[test]
+fn adapters_list_returns_portable_builtin_interfaces() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args(["adapters", "list", "--kind", "agent"])
+        .output()
+        .expect("mosaic adapters list should run");
+    assert!(output.status.success());
+
+    let envelope: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("adapter list");
+    assert_eq!(envelope["schema_version"], "mosaic.control.v1");
+    assert_eq!(envelope["event"], "adapters.list");
+    assert_eq!(envelope["adapter_schema_version"], "mosaic.adapter.v1");
+    let adapters = envelope["data"].as_array().expect("adapters");
+    assert!(!adapters.is_empty());
+    assert!(adapters
+        .iter()
+        .all(|adapter| adapter["kind"].as_str() == Some("agent")));
+    let text = serde_json::to_string(&envelope).expect("adapter list json");
+    assert!(!text.contains("/home/hasna"));
+    assert!(!text.contains("spark"));
+}
+
+#[test]
+fn adapters_list_accepts_schema_kind_names() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args(["adapters", "list", "--kind", "project_registry"])
+        .output()
+        .expect("mosaic adapters list should run");
+    assert!(output.status.success());
+
+    let envelope: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("adapter list");
+    let adapters = envelope["data"].as_array().expect("adapters");
+    assert!(!adapters.is_empty());
+    assert!(adapters
+        .iter()
+        .all(|adapter| adapter["kind"].as_str() == Some("project_registry")));
+}
+
+#[test]
+fn adapters_list_rejects_unknown_kinds_as_json_errors() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args(["adapters", "list", "--kind", "hasna_private"])
+        .output()
+        .expect("mosaic adapters list should run");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+
+    let error: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stderr).trim()).expect("error");
+    assert_eq!(error["code"], "invalid_adapter_kind");
+}
+
+#[test]
+fn adapters_validate_accepts_a_manifest_without_executing_it() {
+    let temp = tempdir().expect("manifest tempdir");
+    let manifest_path = temp.path().join("adapter.json");
+    fs::write(
+        &manifest_path,
+        json!({
+            "schema_version": "mosaic.adapter.v1",
+            "id": "example.agent",
+            "kind": "agent",
+            "name": "Example Agent",
+            "version": "1.0.0",
+            "capabilities": ["pane.detect", "prompt.send"],
+            "command": ["example-agent", "--stdio"]
+        })
+        .to_string(),
+    )
+    .expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "adapters",
+            "validate",
+            "--file",
+            manifest_path.to_str().expect("manifest path"),
+        ])
+        .output()
+        .expect("mosaic adapters validate should run");
+    assert!(output.status.success());
+
+    let envelope: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim()).expect("validation");
+    assert_eq!(envelope["event"], "adapters.validate");
+    assert_eq!(envelope["valid"], true);
+    assert_eq!(envelope["adapter"]["id"], "example.agent");
+}
+
+#[test]
+fn adapters_validate_rejects_invalid_manifests() {
+    let temp = tempdir().expect("manifest tempdir");
+    let manifest_path = temp.path().join("adapter.json");
+    fs::write(
+        &manifest_path,
+        json!({
+            "schema_version": "mosaic.adapter.v1",
+            "id": "../bad",
+            "kind": "hasna_private",
+            "version": "1.0.0"
+        })
+        .to_string(),
+    )
+    .expect("write manifest");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args([
+            "adapters",
+            "validate",
+            "--file",
+            manifest_path.to_str().expect("manifest path"),
+        ])
+        .output()
+        .expect("mosaic adapters validate should run");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let error: Value =
+        serde_json::from_str(String::from_utf8_lossy(&output.stderr).trim()).expect("error");
+    assert_eq!(error["code"], "invalid_adapter_manifest");
 }
 
 #[test]
