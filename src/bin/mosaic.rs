@@ -29,6 +29,8 @@ use zellij_utils::{
 mod mosaic_adapters;
 #[path = "mosaic/agent.rs"]
 mod mosaic_agent;
+#[path = "mosaic/machines.rs"]
+mod mosaic_machines;
 
 const SCHEMA_VERSION: &str = "mosaic.control.v1";
 
@@ -97,6 +99,11 @@ enum MosaicCommand {
     Adapters {
         #[clap(subcommand)]
         command: AdapterCommand,
+    },
+    /// Inspect and use optional machine transports.
+    Machines {
+        #[clap(subcommand)]
+        command: MachineCommand,
     },
     /// Capture structured pane observations.
     Observe {
@@ -228,6 +235,18 @@ enum AdapterCommand {
 }
 
 #[derive(Subcommand, Debug)]
+enum MachineCommand {
+    /// Show this machine's portable Mosaic descriptor.
+    Local,
+    /// List configured machines plus the local machine descriptor.
+    List(MachineListArgs),
+    /// Validate a machine registry file without connecting to any machine.
+    Validate(MachineValidateArgs),
+    /// Execute a Mosaic command through a configured machine transport.
+    Exec(MachineExecArgs),
+}
+
+#[derive(Subcommand, Debug)]
 enum ObserveCommand {
     /// Capture a structured snapshot of one pane.
     Pane(ObservePaneArgs),
@@ -255,6 +274,39 @@ struct AdapterValidateArgs {
     /// Path to a JSON adapter manifest.
     #[clap(long)]
     file: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+struct MachineListArgs {
+    /// Optional machine registry JSON file. Defaults to XDG config if present.
+    #[clap(long)]
+    file: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+struct MachineValidateArgs {
+    /// Path to a Mosaic machine registry JSON file.
+    #[clap(long)]
+    file: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+struct MachineExecArgs {
+    /// Optional machine registry JSON file. Defaults to XDG config if present.
+    #[clap(long)]
+    file: Option<PathBuf>,
+    /// Machine ID to use. The built-in local machine is named "local".
+    #[clap(long)]
+    machine: String,
+    /// Override the remote Mosaic binary path from the registry.
+    #[clap(long)]
+    mosaic_bin: Option<String>,
+    /// Hide prompt bodies and prompt file paths from the returned command plan.
+    #[clap(long)]
+    redact_command: bool,
+    /// Mosaic command to run on the target machine, for example: -- sessions list
+    #[clap(last = true, required = true)]
+    command: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -525,6 +577,7 @@ fn run(cli: MosaicCli) -> Result<u8, MosaicError> {
         MosaicCommand::Queue { command } => run_queue(command, cli.session, cli.dry_run),
         MosaicCommand::Audit { command } => run_audit(command),
         MosaicCommand::Adapters { command } => run_adapters(command),
+        MosaicCommand::Machines { command } => run_machines(command, cli.dry_run),
         MosaicCommand::Observe { command } => {
             let session = resolve_session(cli.session)?;
             run_observe(&session, command)
@@ -616,6 +669,294 @@ fn normalize_adapter_kind(kind: &str) -> Result<String, MosaicError> {
                 mosaic_adapters::known_kinds().join(", ")
             ),
         ))
+    }
+}
+
+fn run_machines(command: MachineCommand, dry_run: bool) -> Result<u8, MosaicError> {
+    match command {
+        MachineCommand::Local => {
+            print_value(json!({
+                "schema_version": SCHEMA_VERSION,
+                "event": "machines.local",
+                "machine_schema_version": mosaic_machines::MACHINE_SCHEMA_VERSION,
+                "timestamp_ms": now_millis(),
+                "data": mosaic_machines::local_machine(),
+            }))?;
+            Ok(0)
+        },
+        MachineCommand::List(args) => {
+            let (machines, registry) = load_machine_registry(args.file.as_deref(), true)?;
+            print_value(json!({
+                "schema_version": SCHEMA_VERSION,
+                "event": "machines.list",
+                "machine_schema_version": mosaic_machines::MACHINE_SCHEMA_VERSION,
+                "timestamp_ms": now_millis(),
+                "registry": registry,
+                "data": machines,
+            }))?;
+            Ok(0)
+        },
+        MachineCommand::Validate(args) => {
+            let registry = read_machine_registry(&args.file)?;
+            mosaic_machines::validate_registry(&registry).map_err(|e| {
+                MosaicError::new(
+                    "invalid_machine_registry",
+                    format!("{}: {e}", args.file.display()),
+                )
+            })?;
+            print_value(json!({
+                "schema_version": SCHEMA_VERSION,
+                "event": "machines.validate",
+                "machine_schema_version": mosaic_machines::MACHINE_SCHEMA_VERSION,
+                "timestamp_ms": now_millis(),
+                "valid": true,
+                "registry": registry,
+            }))?;
+            Ok(0)
+        },
+        MachineCommand::Exec(args) => run_machine_exec(args, dry_run),
+    }
+}
+
+fn run_machine_exec(args: MachineExecArgs, dry_run: bool) -> Result<u8, MosaicError> {
+    let (machines, registry) = load_machine_registry(args.file.as_deref(), true)?;
+    let machine = mosaic_machines::find_machine(&machines, &args.machine).ok_or_else(|| {
+        MosaicError::new(
+            "machine_not_found",
+            format!(
+                "machine {:?} not found in local descriptor or configured registry",
+                args.machine
+            ),
+        )
+    })?;
+    let plan =
+        mosaic_machines::build_command_plan(machine, &args.command, args.mosaic_bin.as_deref())
+            .map_err(|e| MosaicError::new("invalid_machine_command", e))?;
+    let id = format!("mosaic-machine-{}-{}", std::process::id(), now_millis());
+    if dry_run {
+        let event = machine_exec_event(
+            &id,
+            "dry_run",
+            "none",
+            None,
+            None,
+            &plan,
+            &registry,
+            args.redact_command,
+        );
+        audit(&machine_exec_audit_record(
+            &id, "dry_run", "none", None, None, &plan,
+        ));
+        print_value(event)?;
+        return Ok(0);
+    }
+
+    let output = Command::new(&plan.program)
+        .args(&plan.args)
+        .output()
+        .map_err(|e| {
+            MosaicError::new(
+                "machine_exec_failed",
+                format!("failed to spawn {}: {e}", plan.program),
+            )
+        })?;
+    let exit_code = output.status.code().unwrap_or(1) as u8;
+    let status = if output.status.success() {
+        "completed"
+    } else {
+        "error"
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let error = if output.status.success() {
+        None
+    } else {
+        Some(format!("transport command exited with status {exit_code}"))
+    };
+    let event = machine_exec_event(
+        &id,
+        status,
+        "process_exited",
+        Some(exit_code),
+        error.clone(),
+        &plan,
+        &registry,
+        args.redact_command,
+    );
+    let mut event = event;
+    event["stdout"] = json!(stdout);
+    event["stderr"] = json!(stderr);
+    if let Ok(stdout_json) = serde_json::from_slice::<Value>(&output.stdout) {
+        event["stdout_json"] = stdout_json;
+    }
+    audit(&machine_exec_audit_record(
+        &id,
+        status,
+        "process_exited",
+        Some(exit_code),
+        error,
+        &plan,
+    ));
+    print_value(event)?;
+    Ok(exit_code)
+}
+
+fn load_machine_registry(
+    requested_path: Option<&Path>,
+    include_local: bool,
+) -> Result<(Vec<Value>, Value), MosaicError> {
+    let path = requested_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(mosaic_machines::default_config_path);
+    let mut machines = Vec::new();
+    if include_local {
+        machines.push(mosaic_machines::local_machine());
+    }
+    if requested_path.is_none() && !path.exists() {
+        return Ok((
+            machines,
+            json!({
+                "path": path.display().to_string(),
+                "loaded": false,
+                "missing": true,
+            }),
+        ));
+    }
+    match read_machine_registry(&path) {
+        Ok(registry) => {
+            let configured = mosaic_machines::machines_from_registry(&registry).map_err(|e| {
+                MosaicError::new(
+                    "invalid_machine_registry",
+                    format!("{}: {e}", path.display()),
+                )
+            })?;
+            if include_local
+                && configured
+                    .iter()
+                    .any(|machine| machine.get("id").and_then(Value::as_str) == Some("local"))
+            {
+                return Err(MosaicError::new(
+                    "invalid_machine_registry",
+                    format!(
+                        "{}: configured machine id \"local\" is reserved for the built-in local descriptor",
+                        path.display()
+                    ),
+                ));
+            }
+            machines.extend(configured);
+            Ok((
+                machines,
+                json!({
+                    "path": path.display().to_string(),
+                    "loaded": true,
+                }),
+            ))
+        },
+        Err(error) => Err(error),
+    }
+}
+
+fn read_machine_registry(path: &Path) -> Result<Value, MosaicError> {
+    let raw = fs::read_to_string(path).map_err(|e| {
+        MosaicError::new(
+            "machine_registry_read_failed",
+            format!("failed to read {}: {e}", path.display()),
+        )
+    })?;
+    serde_json::from_str::<Value>(&raw).map_err(|e| {
+        MosaicError::new(
+            "invalid_machine_registry_json",
+            format!("{}: {e}", path.display()),
+        )
+    })
+}
+
+fn machine_exec_event(
+    id: &str,
+    status: &str,
+    ack: &str,
+    exit_code: Option<u8>,
+    error: Option<String>,
+    plan: &mosaic_machines::MachineCommandPlan,
+    registry: &Value,
+    redact_command: bool,
+) -> Value {
+    let mut command = plan.to_json();
+    if redact_command {
+        redact_machine_command_plan(&mut command);
+    }
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "event": "machines.exec",
+        "id": id,
+        "operation": "machines.exec",
+        "machine": &plan.machine_id,
+        "transport": &plan.transport_kind,
+        "status": status,
+        "ack": ack,
+        "timestamp_ms": now_millis(),
+        "exit_code": exit_code,
+        "error": error,
+        "registry": registry,
+        "command": command,
+    })
+}
+
+fn machine_exec_audit_record(
+    id: &str,
+    status: &str,
+    ack: &str,
+    exit_code: Option<u8>,
+    error: Option<String>,
+    plan: &mosaic_machines::MachineCommandPlan,
+) -> Value {
+    let mut command = plan.to_json();
+    redact_machine_command_plan(&mut command);
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "event": "receipt",
+        "id": id,
+        "operation": "machines.exec",
+        "machine": &plan.machine_id,
+        "transport": &plan.transport_kind,
+        "status": status,
+        "ack": ack,
+        "timestamp_ms": now_millis(),
+        "exit_code": exit_code,
+        "error": error,
+        "command": command,
+    })
+}
+
+fn redact_machine_command_plan(command: &mut Value) {
+    if let Value::Object(object) = command {
+        let transport = object
+            .get("transport")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        for field in ["mosaic_command", "argv", "args"] {
+            if let Some(Value::Array(values)) = object.get_mut(field) {
+                if transport == "ssh" && matches!(field, "argv" | "args") {
+                    if let Some(last) = values.last_mut() {
+                        *last = json!("[redacted]");
+                    }
+                } else {
+                    let segments = values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>();
+                    *values = mosaic_machines::redact_mosaic_command(&segments)
+                        .into_iter()
+                        .map(Value::String)
+                        .collect();
+                }
+            }
+        }
+        if object.contains_key("remote_shell_command") {
+            object.insert("remote_shell_command".to_owned(), json!("[redacted]"));
+        }
     }
 }
 

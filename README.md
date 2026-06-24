@@ -60,6 +60,7 @@ Reference docs:
 
 - [Mosaic CLI](docs/MOSAIC_CLI.md)
 - [Adapter manifests](docs/MOSAIC_ADAPTERS.md)
+- [Machines and transports](docs/MOSAIC_MACHINES.md)
 - [Migration notes from Zellij and tmux](docs/MIGRATION.md)
 - [Open Mosaic and tmux for agents](docs/TMUX_FOR_AGENTS.md)
 - [Optional dispatch integration](docs/DISPATCH_INTEGRATION.md)

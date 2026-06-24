@@ -145,6 +145,25 @@ mosaic adapters validate --file adapter.json
 manifest file without executing it. See `docs/MOSAIC_ADAPTERS.md` for the
 manifest schema, supported kinds, and capability names.
 
+## Machines
+
+```sh
+mosaic machines local
+mosaic machines list
+mosaic machines list --file machines.json
+mosaic machines validate --file machines.json
+mosaic --dry-run machines exec --file machines.json --machine dev -- sessions list
+```
+
+`machines` is the optional multi-machine surface. It uses portable
+`mosaic.machine.v1` registry files and generic transports such as SSH. It does
+not require private registries or Open Machines. `machines exec` runs the
+normal Mosaic command named after `--` on the target machine; use top-level
+`--dry-run` to inspect the local command plan without connecting, and
+`--redact-command` when prompt bodies or prompt file paths appear in the
+command. See `docs/MOSAIC_MACHINES.md` for the registry shape and SSH safety
+rules.
+
 ## Observation
 
 ```sh

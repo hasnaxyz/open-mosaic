@@ -25,5 +25,7 @@ The first native surface is the `mosaic` binary, documented in
 `docs/MOSAIC_ADAPTERS.md`. Migration notes from Zellij and tmux are in
 `docs/MIGRATION.md`, with an agent-focused tmux comparison in
 `docs/TMUX_FOR_AGENTS.md`. Optional dispatch backend guidance is in
-`docs/DISPATCH_INTEGRATION.md`. Existing Zellij-derived crate and runtime names
-are implementation compatibility unless the relevant document says otherwise.
+`docs/DISPATCH_INTEGRATION.md`. Optional machine and transport registries are
+documented in `docs/MOSAIC_MACHINES.md`. Existing Zellij-derived crate and
+runtime names are implementation compatibility unless the relevant document says
+otherwise.
