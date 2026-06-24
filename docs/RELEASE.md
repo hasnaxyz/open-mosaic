@@ -74,6 +74,7 @@ cargo check --bin mosaic --no-default-features --features vendored_curl
 cargo test --bin mosaic --no-default-features --features vendored_curl
 cargo test --test mosaic_cli --no-default-features --features vendored_curl
 cargo package --list
+scripts/check-upstream-hygiene.sh
 ```
 
 After the workflow publishes assets, verify:
@@ -103,3 +104,7 @@ conflicts around:
 
 If upstream Zellij changes licensing or attribution files, reconcile them
 manually and keep notices intact.
+
+The detailed sync workflow and attribution checklist live in
+`docs/UPSTREAM_MAINTENANCE.md`. Run `scripts/check-upstream-hygiene.sh` before
+opening upstream-sync or release PRs.

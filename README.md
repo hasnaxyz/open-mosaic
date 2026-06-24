@@ -70,6 +70,7 @@ Reference docs:
 - [Open Mosaic and tmux for agents](docs/TMUX_FOR_AGENTS.md)
 - [Optional dispatch integration](docs/DISPATCH_INTEGRATION.md)
 - [Open Mosaic product contract](docs/OPEN_MOSAIC.md)
+- [Upstream maintenance](docs/UPSTREAM_MAINTENANCE.md)
 
 ## How Open Mosaic Differs From Zellij
 
@@ -109,6 +110,9 @@ scripts/mosaic-workflow-smoke.sh
 The upstream project is [zellij-org/zellij](https://github.com/zellij-org/zellij).
 Keep upstream attribution and MIT notices intact when syncing or modifying the
 fork. Do not push to the upstream remote from this repository.
+The maintainer workflow is documented in
+[docs/UPSTREAM_MAINTENANCE.md](docs/UPSTREAM_MAINTENANCE.md). Run
+`scripts/check-upstream-hygiene.sh` before release or upstream-sync PRs.
 
 ## License
 

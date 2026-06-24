@@ -22,6 +22,8 @@ Core requirements:
 - Web oversight must distinguish read-only watcher links from control links
   and must not place raw authentication tokens in URLs.
 - Upstream sync must keep Zellij attribution and MIT notices intact.
+- Maintainers must keep the `upstream` remote pull-only and run the upstream
+  hygiene check before upstream-sync and release PRs.
 
 The first native surface is the `mosaic` binary, documented in
 `docs/MOSAIC_CLI.md`. Getting started commands are in
@@ -33,5 +35,7 @@ The first native surface is the `mosaic` binary, documented in
 documented in `docs/MOSAIC_MACHINES.md`. Portable goal/task registries and the
 optional external todos adapter are documented in `docs/MOSAIC_GOALS.md`.
 Bookmarkable web oversight links are documented in `docs/MOSAIC_WEB.md`.
+Upstream sync and license hygiene are documented in
+`docs/UPSTREAM_MAINTENANCE.md`.
 Existing Zellij-derived crate and runtime names are implementation
 compatibility unless the relevant document says otherwise.
