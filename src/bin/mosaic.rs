@@ -90,6 +90,11 @@ enum MosaicCommand {
         #[clap(subcommand)]
         command: AuditCommand,
     },
+    /// Capture structured pane observations.
+    Observe {
+        #[clap(subcommand)]
+        command: ObserveCommand,
+    },
     /// Capture pane output.
     Capture(CaptureArgs),
     /// Subscribe to pane output.
@@ -204,12 +209,37 @@ enum AuditCommand {
     List(AuditListArgs),
 }
 
+#[derive(Subcommand, Debug)]
+enum ObserveCommand {
+    /// Capture a structured snapshot of one pane.
+    Pane(ObservePaneArgs),
+}
+
 #[derive(Parser, Debug)]
 struct AuditListArgs {
     /// Maximum records to return, newest records kept.
     #[clap(long)]
     limit: Option<usize>,
     /// Redact prompt bodies if present in future audit records.
+    #[clap(long)]
+    redact: bool,
+}
+
+#[derive(Parser, Debug)]
+struct ObservePaneArgs {
+    /// Target pane ID.
+    #[clap(short, long)]
+    pane_id: String,
+    /// Return only the last N captured lines; 0 means all captured lines.
+    #[clap(long)]
+    last_lines: Option<usize>,
+    /// Include full scrollback before applying --last-lines.
+    #[clap(long)]
+    scrollback: bool,
+    /// Preserve ANSI styling.
+    #[clap(long)]
+    ansi: bool,
+    /// Redact returned terminal lines. Audit records never include raw lines.
     #[clap(long)]
     redact: bool,
 }
@@ -437,6 +467,10 @@ fn run(cli: MosaicCli) -> Result<u8, MosaicError> {
         },
         MosaicCommand::Queue { command } => run_queue(command, cli.session, cli.dry_run),
         MosaicCommand::Audit { command } => run_audit(command),
+        MosaicCommand::Observe { command } => {
+            let session = resolve_session(cli.session)?;
+            run_observe(&session, command)
+        },
         MosaicCommand::Capture(args) => {
             let session = resolve_session(cli.session)?;
             let output = dispatch_cli_action_capture(
@@ -456,6 +490,39 @@ fn run(cli: MosaicCli) -> Result<u8, MosaicError> {
         MosaicCommand::Subscribe(args) => {
             let session = resolve_session(cli.session)?;
             run_subscribe(&session, args)
+        },
+    }
+}
+
+fn run_observe(session: &str, command: ObserveCommand) -> Result<u8, MosaicError> {
+    match command {
+        ObserveCommand::Pane(args) => {
+            validate_pane_id(&args.pane_id)?;
+            let output = dispatch_cli_action_capture(
+                session,
+                CliAction::DumpScreen {
+                    path: None,
+                    full: args.scrollback,
+                    pane_id: Some(args.pane_id.clone()),
+                    ansi: args.ansi,
+                },
+            )?;
+            let redacted = args.redact || env_flag_enabled("MOSAIC_OBSERVE_REDACT");
+            let observation = build_pane_observation(
+                session,
+                &args.pane_id,
+                output.lines,
+                ObservationOptions {
+                    last_lines: args.last_lines,
+                    scrollback: args.scrollback,
+                    ansi: args.ansi,
+                    redacted,
+                    exit_code: output.exit_code,
+                },
+            );
+            audit(&observation.audit_record);
+            print_value(observation.event)?;
+            Ok(0)
         },
     }
 }
@@ -691,6 +758,220 @@ fn run_prompt_send(session: &str, args: PromptSendArgs, dry_run: bool) -> Result
 struct CapturedOutput {
     lines: Vec<String>,
     exit_code: u8,
+}
+
+struct ObservationOptions {
+    last_lines: Option<usize>,
+    scrollback: bool,
+    ansi: bool,
+    redacted: bool,
+    exit_code: u8,
+}
+
+struct PaneObservation {
+    event: Value,
+    audit_record: Value,
+}
+
+fn build_pane_observation(
+    session: &str,
+    pane_id: &str,
+    captured_lines: Vec<String>,
+    options: ObservationOptions,
+) -> PaneObservation {
+    let timestamp_ms = now_millis();
+    let id = format!("mosaic-observe-{}-{timestamp_ms}", std::process::id());
+    let captured_lines = normalize_captured_lines(captured_lines);
+    let total_line_count = captured_lines.len();
+    let mut lines = select_last_lines(captured_lines, options.last_lines);
+    let truncated_head = lines.len() < total_line_count;
+    let mut activity = summarize_lines(&lines, total_line_count, truncated_head, options.exit_code);
+    if options.redacted {
+        let has_last_line = !activity["last_non_empty_line"].is_null();
+        redact_output_lines(&mut lines);
+        if has_last_line {
+            activity["last_non_empty_line"] = json!("[redacted]");
+        }
+    }
+    let event = json!({
+        "schema_version": SCHEMA_VERSION,
+        "event": "observe.pane",
+        "id": id,
+        "session": session,
+        "pane_id": pane_id,
+        "timestamp_ms": timestamp_ms,
+        "source": "dump_screen",
+        "scrollback": options.scrollback,
+        "ansi": options.ansi,
+        "redacted": options.redacted,
+        "activity": activity,
+        "lines": lines,
+    });
+    let audit_record = json!({
+        "schema_version": SCHEMA_VERSION,
+        "event": "observation",
+        "id": id,
+        "operation": "observe.pane",
+        "session": session,
+        "pane_id": pane_id,
+        "timestamp_ms": timestamp_ms,
+        "status": "captured",
+        "source": "dump_screen",
+        "scrollback": options.scrollback,
+        "ansi": options.ansi,
+        "redacted": options.redacted,
+        "activity": audit_safe_activity(&event["activity"]),
+    });
+    PaneObservation {
+        event,
+        audit_record,
+    }
+}
+
+fn audit_safe_activity(activity: &Value) -> Value {
+    let mut activity = activity.clone();
+    if let Value::Object(object) = &mut activity {
+        if object.remove("last_non_empty_line").is_some() {
+            object.insert("last_non_empty_line_omitted".to_owned(), json!(true));
+        }
+    }
+    activity
+}
+
+fn normalize_captured_lines(lines: Vec<String>) -> Vec<String> {
+    lines
+        .into_iter()
+        .flat_map(|line| {
+            line.split('\n')
+                .map(|segment| segment.trim_end_matches('\r').to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn select_last_lines(lines: Vec<String>, last_lines: Option<usize>) -> Vec<String> {
+    match last_lines {
+        Some(0) | None => lines,
+        Some(limit) if lines.len() > limit => lines[lines.len() - limit..].to_vec(),
+        Some(_) => lines,
+    }
+}
+
+fn summarize_lines(
+    lines: &[String],
+    total_line_count: usize,
+    truncated_head: bool,
+    exit_code: u8,
+) -> Value {
+    let non_empty_line_count = lines.iter().filter(|line| !line.trim().is_empty()).count();
+    let last_non_empty_line = lines
+        .iter()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .cloned();
+    let char_count = lines.iter().map(|line| line.chars().count()).sum::<usize>();
+    json!({
+        "state": if non_empty_line_count == 0 { "empty" } else { "active" },
+        "line_count_total": total_line_count,
+        "line_count_returned": lines.len(),
+        "non_empty_line_count": non_empty_line_count,
+        "char_count_returned": char_count,
+        "truncated_head": truncated_head,
+        "last_non_empty_line": last_non_empty_line,
+        "exit_code": exit_code,
+    })
+}
+
+fn redact_output_lines(lines: &mut [String]) {
+    for line in lines {
+        if !line.is_empty() {
+            *line = "[redacted]".to_owned();
+        }
+    }
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    env::var(name)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+
+    #[test]
+    fn pane_observation_trims_lines_and_summarizes_activity() {
+        let observation = build_pane_observation(
+            "work",
+            "terminal_1",
+            vec!["first\n\nlast".to_owned()],
+            ObservationOptions {
+                last_lines: Some(2),
+                scrollback: true,
+                ansi: false,
+                redacted: false,
+                exit_code: 0,
+            },
+        );
+
+        assert_eq!(observation.event["schema_version"], SCHEMA_VERSION);
+        assert_eq!(observation.event["event"], "observe.pane");
+        assert_eq!(observation.event["session"], "work");
+        assert_eq!(observation.event["pane_id"], "terminal_1");
+        assert_eq!(observation.event["scrollback"], true);
+        assert_eq!(observation.event["lines"][0], "");
+        assert_eq!(observation.event["lines"][1], "last");
+        assert_eq!(observation.event["activity"]["line_count_total"], 3);
+        assert_eq!(observation.event["activity"]["line_count_returned"], 2);
+        assert_eq!(observation.event["activity"]["non_empty_line_count"], 1);
+        assert_eq!(observation.event["activity"]["truncated_head"], true);
+        assert_eq!(observation.event["activity"]["last_non_empty_line"], "last");
+        assert_eq!(observation.audit_record["event"], "observation");
+        assert_eq!(observation.audit_record["operation"], "observe.pane");
+        assert_eq!(observation.audit_record["lines"], Value::Null);
+        assert_eq!(
+            observation.audit_record["activity"]["last_non_empty_line"],
+            Value::Null
+        );
+        assert_eq!(
+            observation.audit_record["activity"]["last_non_empty_line_omitted"],
+            true
+        );
+        assert_eq!(observation.audit_record["id"], observation.event["id"]);
+    }
+
+    #[test]
+    fn pane_observation_redacts_returned_lines_and_last_line() {
+        let observation = build_pane_observation(
+            "work",
+            "terminal_1",
+            vec!["secret".to_owned(), "".to_owned()],
+            ObservationOptions {
+                last_lines: None,
+                scrollback: false,
+                ansi: false,
+                redacted: true,
+                exit_code: 0,
+            },
+        );
+
+        assert_eq!(observation.event["redacted"], true);
+        assert_eq!(observation.event["lines"][0], "[redacted]");
+        assert_eq!(observation.event["lines"][1], "");
+        assert_eq!(
+            observation.event["activity"]["last_non_empty_line"],
+            "[redacted]"
+        );
+        assert_eq!(observation.audit_record["lines"], Value::Null);
+        let audit_json = serde_json::to_string(&observation.audit_record).expect("audit json");
+        assert!(!audit_json.contains("secret"));
+    }
 }
 
 fn dispatch_cli_action_capture(

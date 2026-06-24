@@ -135,10 +135,28 @@ evidence, not as proof that a terminal process consumed a prompt.
 ## Observation
 
 ```sh
+mosaic --session work observe pane --pane-id terminal_1 --last-lines 40
+mosaic --session work observe pane --pane-id terminal_1 --scrollback --last-lines 100
+mosaic --session work observe pane --pane-id terminal_1 --redact
 mosaic --session work capture --pane-id terminal_1 --scrollback
 mosaic --session work subscribe --pane-id terminal_1 --scrollback 50
 mosaic --session work subscribe --pane-id terminal_1 --format raw
 ```
+
+`observe pane` returns an `observe.pane` JSON event for agents and dashboards.
+It captures the current pane through the server dump-screen path, optionally
+includes full scrollback, applies `--last-lines` after capture, and includes a
+deterministic `activity` summary with total/returned line counts, non-empty
+line count, character count, truncation status, last non-empty line, and server
+exit code. `--last-lines 0` means all captured lines. `--redact` replaces
+returned non-empty terminal lines and the last-line summary with `[redacted]`.
+Setting `MOSAIC_OBSERVE_REDACT=1` applies the same output redaction by default.
+
+Each successful observation appends an `observation` audit record with the same
+ID and audit-safe activity counts, but never stores raw terminal output lines or
+the raw last-line summary in the audit record. This keeps the local audit trail
+useful for receipts and observation timelines without silently persisting pane
+contents.
 
 `subscribe` defaults to NDJSON. Each pane update includes
 `schema_version`, `event`, `session`, `pane_id`, `sequence`, `timestamp_ms`,

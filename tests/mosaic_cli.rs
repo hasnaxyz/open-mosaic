@@ -14,6 +14,7 @@ fn mosaic_help_exposes_agentic_control_surface() {
     assert!(stdout.contains("prompt"));
     assert!(stdout.contains("queue"));
     assert!(stdout.contains("audit"));
+    assert!(stdout.contains("observe"));
     assert!(stdout.contains("subscribe"));
 }
 
