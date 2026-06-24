@@ -32,6 +32,7 @@ The v1 schema includes definitions for:
 - `panes list --all` agent metadata via the `agentMetadata` and `paneEntry`
   definitions
 - local `queued_prompt`, `queue.list`, and `audit.list` records
+- replayable `audit.export`, `audit.export.record`, and `audit.verify` records
 - `observe.pane` structured activity capture
 - `subscribe` NDJSON `pane_update` and `pane_closed` events
 - `dashboard.snapshot`
@@ -51,8 +52,12 @@ Schemas describe shape, not trust. A valid receipt means Mosaic accepted or
 queued an operation; it does not prove that the process inside the pane
 consumed the bytes or completed work. Controllers should pair receipts with
 `observe pane`, `capture`, or `subscribe` evidence before sending follow-up
-work.
+work. `audit.verify` only proves that an exported audit stream is structurally
+and cryptographically self-consistent; it does not prove that a terminal
+process consumed the original prompt.
 
-Redacted values may appear as the literal `[redacted]`. Audit and observation
+Redacted values may appear as the literal `[redacted]`. Audit export hashes are
+computed after redaction when `--redact` is used, so a redacted stream can be
+verified without access to the original prompt bodies. Audit and observation
 records are local user-state evidence and should be treated as sensitive unless
 the caller explicitly redacts them.

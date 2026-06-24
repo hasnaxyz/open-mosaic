@@ -4814,6 +4814,7 @@ dependencies = [
  "rand 0.8.5",
  "regex",
  "serde_json",
+ "sha2",
  "ssh2",
  "suggest",
  "tempfile",

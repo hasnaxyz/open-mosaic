@@ -17,7 +17,8 @@ Core requirements:
 - Immediate delivery receipts mean the Mosaic server accepted the action; they
   do not claim the terminal process has read or completed the prompt.
 - Audit records must include operation, target session/pane, status, timestamp,
-  and receipt ID, with redaction hooks for prompt bodies.
+  and receipt ID, with redaction hooks for prompt bodies and replayable export
+  verification for local history.
 - Goal/task context must use portable schemas and optional adapters; private
   task systems must not be required for core Mosaic control commands.
 - Web oversight must distinguish read-only watcher links from control links

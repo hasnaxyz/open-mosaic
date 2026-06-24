@@ -68,6 +68,9 @@ fn mosaic_control_schema_covers_public_agent_events() {
         "queuedPrompt",
         "queueList",
         "auditList",
+        "auditExport",
+        "auditExportRecord",
+        "auditVerify",
         "observePane",
         "paneUpdate",
         "paneClosed",
@@ -91,6 +94,9 @@ fn mosaic_control_schema_covers_public_agent_events() {
         "queued_prompt",
         "queue.list",
         "audit.list",
+        "audit.export",
+        "audit.export.record",
+        "audit.verify",
         "observe.pane",
         "pane_update",
         "dashboard.snapshot",
@@ -1322,6 +1328,154 @@ fn audit_list_reads_recent_receipts() {
     assert_eq!(envelope["data"][0]["event"], "receipt");
     assert_eq!(envelope["data"][0]["operation"], "prompt.send");
     assert_eq!(envelope["data"][0]["status"], "dry_run");
+}
+
+#[test]
+fn audit_export_emits_replayable_redacted_hash_chain() {
+    let state_dir = tempdir().expect("state tempdir");
+    let audit_dir = state_dir.path().join("open-mosaic");
+    fs::create_dir_all(&audit_dir).expect("audit dir");
+    fs::write(
+        audit_dir.join("audit.ndjson"),
+        json!({
+            "schema_version": "mosaic.control.v1",
+            "event": "receipt",
+            "id": "mosaic-test-receipt",
+            "operation": "prompt.send",
+            "session": "audit-session",
+            "pane_id": "terminal_1",
+            "status": "accepted",
+            "ack": "server_accepted",
+            "timestamp_ms": 42,
+            "prompt": "sensitive prompt",
+            "error": null
+        })
+        .to_string()
+            + "\n",
+    )
+    .expect("audit file");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args(["audit", "export", "--redact"])
+        .output()
+        .expect("mosaic audit export should run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2);
+
+    let manifest: Value = serde_json::from_str(lines[0]).expect("manifest json");
+    let entry: Value = serde_json::from_str(lines[1]).expect("entry json");
+    assert_eq!(manifest["event"], "audit.export");
+    assert_eq!(manifest["record_count"], 1);
+    assert_eq!(manifest["redacted"], true);
+    assert_eq!(entry["event"], "audit.export.record");
+    assert_eq!(entry["sequence"], 0);
+    assert_eq!(entry["previous_hash"], Value::Null);
+    assert_eq!(entry["record"]["prompt"], "[redacted]");
+    assert_eq!(manifest["chain_head"], entry["chain_hash"]);
+
+    let export_path = state_dir.path().join("audit-export.ndjson");
+    fs::write(&export_path, stdout.as_ref()).expect("export file");
+    let verify = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args(["audit", "verify", "--file"])
+        .arg(&export_path)
+        .output()
+        .expect("mosaic audit verify should run");
+    assert!(verify.status.success());
+    let report: Value = serde_json::from_str(String::from_utf8_lossy(&verify.stdout).trim())
+        .expect("verify report");
+    assert_eq!(report["event"], "audit.verify");
+    assert_eq!(report["mode"], "export");
+    assert_eq!(report["status"], "ok");
+    assert_eq!(report["verified_records"], 1);
+}
+
+#[test]
+fn audit_verify_rejects_tampered_export() {
+    let state_dir = tempdir().expect("state tempdir");
+    let audit_dir = state_dir.path().join("open-mosaic");
+    fs::create_dir_all(&audit_dir).expect("audit dir");
+    fs::write(
+        audit_dir.join("audit.ndjson"),
+        json!({
+            "schema_version": "mosaic.control.v1",
+            "event": "receipt",
+            "id": "mosaic-test-receipt",
+            "operation": "prompt.send",
+            "timestamp_ms": 42,
+            "status": "accepted"
+        })
+        .to_string()
+            + "\n",
+    )
+    .expect("audit file");
+    let export = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args(["audit", "export"])
+        .output()
+        .expect("mosaic audit export should run");
+    assert!(export.status.success());
+    let tampered = String::from_utf8_lossy(&export.stdout).replace("prompt.send", "prompt.queue");
+    let export_path = state_dir.path().join("tampered-export.ndjson");
+    fs::write(&export_path, tampered).expect("tampered export");
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .args(["audit", "verify", "--file"])
+        .arg(&export_path)
+        .output()
+        .expect("mosaic audit verify should run");
+    assert!(!verify.status.success());
+    let report: Value = serde_json::from_str(String::from_utf8_lossy(&verify.stdout).trim())
+        .expect("verify report");
+    assert_eq!(report["event"], "audit.verify");
+    assert_eq!(report["status"], "failed");
+    assert!(report["errors"]
+        .as_array()
+        .expect("errors")
+        .iter()
+        .any(|error| error["code"] == "record_hash_mismatch"));
+}
+
+#[test]
+fn audit_verify_local_raw_audit_checks_timestamp_order() {
+    let state_dir = tempdir().expect("state tempdir");
+    let audit_dir = state_dir.path().join("open-mosaic");
+    fs::create_dir_all(&audit_dir).expect("audit dir");
+    fs::write(
+        audit_dir.join("audit.ndjson"),
+        format!(
+            "{}\n{}\n",
+            json!({
+                "schema_version": "mosaic.control.v1",
+                "event": "receipt",
+                "timestamp_ms": 2
+            }),
+            json!({
+                "schema_version": "mosaic.control.v1",
+                "event": "receipt",
+                "timestamp_ms": 1
+            })
+        ),
+    )
+    .expect("audit file");
+
+    let verify = Command::new(env!("CARGO_BIN_EXE_mosaic"))
+        .env("XDG_STATE_HOME", state_dir.path())
+        .args(["audit", "verify"])
+        .output()
+        .expect("mosaic audit verify should run");
+    assert!(!verify.status.success());
+    let report: Value = serde_json::from_str(String::from_utf8_lossy(&verify.stdout).trim())
+        .expect("verify report");
+    assert_eq!(report["mode"], "raw_audit");
+    assert_eq!(report["status"], "failed");
+    assert!(report["errors"]
+        .as_array()
+        .expect("errors")
+        .iter()
+        .any(|error| error["code"] == "timestamp_order_mismatch"));
 }
 
 #[cfg(unix)]

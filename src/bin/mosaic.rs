@@ -1,10 +1,11 @@
 use clap::{ArgEnum, Parser, Subcommand};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     env,
     fs::{self, OpenOptions},
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Command, ExitCode},
     str::FromStr,
@@ -238,6 +239,10 @@ struct QueueClearArgs {
 enum AuditCommand {
     /// List local audit records.
     List(AuditListArgs),
+    /// Export a replayable local audit stream as NDJSON.
+    Export(AuditExportArgs),
+    /// Verify a replayable audit export or the local raw audit log.
+    Verify(AuditVerifyArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -290,6 +295,23 @@ struct AuditListArgs {
     /// Redact prompt bodies if present in future audit records.
     #[clap(long)]
     redact: bool,
+}
+
+#[derive(Parser, Debug)]
+struct AuditExportArgs {
+    /// Maximum records to export, newest records kept.
+    #[clap(long)]
+    limit: Option<usize>,
+    /// Redact prompt bodies before hashing and emitting records.
+    #[clap(long)]
+    redact: bool,
+}
+
+#[derive(Parser, Debug)]
+struct AuditVerifyArgs {
+    /// Export file to verify. Omit to verify the local raw audit log, or pass '-' for stdin.
+    #[clap(long)]
+    file: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
@@ -1573,7 +1595,400 @@ fn run_audit(command: AuditCommand) -> Result<u8, MosaicError> {
             }))?;
             Ok(0)
         },
+        AuditCommand::Export(args) => {
+            let mut records = read_ndjson_file(&audit_path())?;
+            sort_values_by_timestamp(&mut records);
+            if args.redact {
+                redact_prompts(&mut records);
+            }
+            records = last_n_values(records, args.limit);
+            let values = audit_export_values(records, args.redact, "local_state");
+            print_ndjson_values(&values)?;
+            Ok(0)
+        },
+        AuditCommand::Verify(args) => {
+            let source = read_audit_verify_source(args.file.as_deref())?;
+            let report = verify_audit_source(source);
+            let failed = report.get("status").and_then(Value::as_str) == Some("failed");
+            print_value(report)?;
+            Ok(if failed { 1 } else { 0 })
+        },
     }
+}
+
+fn audit_export_values(records: Vec<Value>, redacted: bool, source: &str) -> Vec<Value> {
+    let timestamp_ms = now_millis();
+    let export_id = format!("mosaic-audit-export-{}-{timestamp_ms}", std::process::id());
+    let mut previous_hash: Option<String> = None;
+    let mut entries = Vec::new();
+
+    for (sequence, record) in records.into_iter().enumerate() {
+        let record_hash = sha256_prefixed(canonical_json(&record).as_bytes());
+        let chain_hash = audit_chain_hash(sequence, previous_hash.as_deref(), &record_hash);
+        let entry = json!({
+            "schema_version": SCHEMA_VERSION,
+            "event": "audit.export.record",
+            "export_id": export_id,
+            "sequence": sequence,
+            "timestamp_ms": record_timestamp_ms(&record),
+            "hash_algorithm": "sha256",
+            "record_hash": record_hash,
+            "previous_hash": previous_hash,
+            "chain_hash": chain_hash,
+            "record": record,
+        });
+        previous_hash = entry
+            .get("chain_hash")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        entries.push(entry);
+    }
+
+    let chain_head = previous_hash;
+    let mut values = Vec::with_capacity(entries.len() + 1);
+    values.push(json!({
+        "schema_version": SCHEMA_VERSION,
+        "event": "audit.export",
+        "id": export_id,
+        "timestamp_ms": timestamp_ms,
+        "source": source,
+        "redacted": redacted,
+        "record_count": entries.len(),
+        "hash_algorithm": "sha256",
+        "chain_head": chain_head,
+    }));
+    values.extend(entries);
+    values
+}
+
+struct AuditVerifySource {
+    source: String,
+    source_kind: &'static str,
+    lines: Vec<String>,
+}
+
+fn read_audit_verify_source(file: Option<&Path>) -> Result<AuditVerifySource, MosaicError> {
+    match file {
+        Some(path) if path.as_os_str() == "-" => {
+            let mut input = String::new();
+            io::stdin().read_to_string(&mut input).map_err(|e| {
+                MosaicError::new("stdin_read_failed", format!("failed to read stdin: {e}"))
+            })?;
+            Ok(AuditVerifySource {
+                source: "stdin".to_owned(),
+                source_kind: "stdin",
+                lines: input.lines().map(str::to_owned).collect(),
+            })
+        },
+        Some(path) => {
+            let input = fs::read_to_string(path).map_err(|e| {
+                MosaicError::new(
+                    "state_read_failed",
+                    format!("failed to read {}: {e}", path.display()),
+                )
+            })?;
+            Ok(AuditVerifySource {
+                source: path.display().to_string(),
+                source_kind: "file",
+                lines: input.lines().map(str::to_owned).collect(),
+            })
+        },
+        None => {
+            let path = audit_path();
+            let input = match fs::read_to_string(&path) {
+                Ok(input) => input,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+                Err(error) => {
+                    return Err(MosaicError::new(
+                        "state_read_failed",
+                        format!("failed to read {}: {error}", path.display()),
+                    ));
+                },
+            };
+            Ok(AuditVerifySource {
+                source: path.display().to_string(),
+                source_kind: "local_state",
+                lines: input.lines().map(str::to_owned).collect(),
+            })
+        },
+    }
+}
+
+fn verify_audit_source(source: AuditVerifySource) -> Value {
+    let mut errors = Vec::new();
+    let values = parse_verify_lines(&source.lines, &mut errors);
+    if !errors.is_empty() {
+        return audit_verify_report(source, "unknown", 0, 0, None, errors);
+    }
+
+    match audit_verify_mode(&values) {
+        "export" => verify_audit_export(source, values),
+        "raw_audit" => verify_raw_audit(source, values),
+        _ => audit_verify_report(source, "empty", 0, 0, None, errors),
+    }
+}
+
+fn parse_verify_lines(lines: &[String], errors: &mut Vec<Value>) -> Vec<Value> {
+    let mut values = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Value>(line) {
+            Ok(value) => values.push(value),
+            Err(error) => errors.push(audit_verify_error(
+                "invalid_json",
+                index + 1,
+                error.to_string(),
+            )),
+        }
+    }
+    values
+}
+
+fn audit_verify_mode(values: &[Value]) -> &'static str {
+    let Some(first) = values.first() else {
+        return "empty";
+    };
+    match first.get("event").and_then(Value::as_str) {
+        Some("audit.export") | Some("audit.export.record") => "export",
+        _ => "raw_audit",
+    }
+}
+
+fn verify_audit_export(source: AuditVerifySource, values: Vec<Value>) -> Value {
+    let mut errors = Vec::new();
+    let mut start = 0;
+    let mut expected_count = None;
+    let mut expected_chain_head = None;
+
+    if values
+        .first()
+        .and_then(|value| value.get("event"))
+        .and_then(Value::as_str)
+        == Some("audit.export")
+    {
+        start = 1;
+        expected_count = values[0].get("record_count").and_then(Value::as_u64);
+        if expected_count.is_none() {
+            errors.push(audit_verify_error(
+                "missing_record_count",
+                1,
+                "manifest record_count must be an unsigned integer",
+            ));
+        }
+        if values[0].get("hash_algorithm").and_then(Value::as_str) != Some("sha256") {
+            errors.push(audit_verify_error(
+                "hash_algorithm_mismatch",
+                1,
+                "manifest hash_algorithm must be sha256",
+            ));
+        }
+        expected_chain_head = values[0]
+            .get("chain_head")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if !values[0]
+            .get("chain_head")
+            .map(|value| value.is_null() || value.as_str().is_some())
+            .unwrap_or(false)
+        {
+            errors.push(audit_verify_error(
+                "missing_chain_head",
+                1,
+                "manifest chain_head must be null or a sha256 hash",
+            ));
+        }
+    }
+
+    let entries = &values[start..];
+    let mut previous_hash: Option<String> = None;
+    let mut verified_records = 0;
+
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.get("event").and_then(Value::as_str) != Some("audit.export.record") {
+            errors.push(audit_verify_error(
+                "unexpected_event",
+                start + index + 1,
+                "expected audit.export.record",
+            ));
+            continue;
+        }
+        if entry.get("sequence").and_then(Value::as_u64) != Some(index as u64) {
+            errors.push(audit_verify_error(
+                "sequence_mismatch",
+                start + index + 1,
+                format!("expected sequence {index}"),
+            ));
+        }
+        if entry.get("hash_algorithm").and_then(Value::as_str) != Some("sha256") {
+            errors.push(audit_verify_error(
+                "hash_algorithm_mismatch",
+                start + index + 1,
+                "entry hash_algorithm must be sha256",
+            ));
+        }
+        if entry.get("previous_hash").is_none() {
+            errors.push(audit_verify_error(
+                "missing_previous_hash",
+                start + index + 1,
+                "entry previous_hash must be present",
+            ));
+        }
+        let actual_previous = entry.get("previous_hash").and_then(Value::as_str);
+        if actual_previous != previous_hash.as_deref() {
+            errors.push(audit_verify_error(
+                "previous_hash_mismatch",
+                start + index + 1,
+                "previous_hash does not match prior chain_hash",
+            ));
+        }
+        let Some(record) = entry.get("record") else {
+            errors.push(audit_verify_error(
+                "missing_record",
+                start + index + 1,
+                "export entry is missing record",
+            ));
+            continue;
+        };
+        let expected_record_hash = sha256_prefixed(canonical_json(record).as_bytes());
+        if entry.get("record_hash").and_then(Value::as_str).is_none() {
+            errors.push(audit_verify_error(
+                "missing_record_hash",
+                start + index + 1,
+                "entry record_hash must be present",
+            ));
+        }
+        if entry.get("record_hash").and_then(Value::as_str) != Some(expected_record_hash.as_str()) {
+            errors.push(audit_verify_error(
+                "record_hash_mismatch",
+                start + index + 1,
+                "record_hash does not match canonical record JSON",
+            ));
+        }
+        let expected_chain_hash =
+            audit_chain_hash(index, previous_hash.as_deref(), &expected_record_hash);
+        if entry.get("chain_hash").and_then(Value::as_str).is_none() {
+            errors.push(audit_verify_error(
+                "missing_chain_hash",
+                start + index + 1,
+                "entry chain_hash must be present",
+            ));
+        }
+        if entry.get("chain_hash").and_then(Value::as_str) != Some(expected_chain_hash.as_str()) {
+            errors.push(audit_verify_error(
+                "chain_hash_mismatch",
+                start + index + 1,
+                "chain_hash does not match sequence, previous_hash, and record_hash",
+            ));
+        }
+        previous_hash = Some(expected_chain_hash);
+        verified_records += 1;
+    }
+
+    if expected_count.is_some() && expected_count != Some(entries.len() as u64) {
+        errors.push(audit_verify_error(
+            "record_count_mismatch",
+            1,
+            format!("manifest record_count does not match {}", entries.len()),
+        ));
+    }
+    if expected_chain_head.is_some() && expected_chain_head != previous_hash {
+        errors.push(audit_verify_error(
+            "chain_head_mismatch",
+            1,
+            "manifest chain_head does not match final entry chain_hash",
+        ));
+    }
+
+    audit_verify_report(
+        source,
+        "export",
+        entries.len(),
+        verified_records,
+        previous_hash,
+        errors,
+    )
+}
+
+fn verify_raw_audit(source: AuditVerifySource, values: Vec<Value>) -> Value {
+    let mut errors = Vec::new();
+    let mut previous_timestamp = 0;
+
+    for (index, record) in values.iter().enumerate() {
+        if !record.is_object() {
+            errors.push(audit_verify_error(
+                "invalid_record_shape",
+                index + 1,
+                "audit record must be a JSON object",
+            ));
+            continue;
+        }
+        if record.get("schema_version").and_then(Value::as_str) != Some(SCHEMA_VERSION) {
+            errors.push(audit_verify_error(
+                "schema_version_mismatch",
+                index + 1,
+                "audit record schema_version is not mosaic.control.v1",
+            ));
+        }
+        if record.get("event").and_then(Value::as_str).is_none() {
+            errors.push(audit_verify_error(
+                "missing_event",
+                index + 1,
+                "audit record is missing event",
+            ));
+        }
+        let timestamp = record_timestamp_ms(record);
+        if timestamp < previous_timestamp {
+            errors.push(audit_verify_error(
+                "timestamp_order_mismatch",
+                index + 1,
+                "audit record timestamp is older than the previous record",
+            ));
+        }
+        previous_timestamp = timestamp;
+    }
+
+    audit_verify_report(
+        source,
+        "raw_audit",
+        values.len(),
+        values.len(),
+        None,
+        errors,
+    )
+}
+
+fn audit_verify_report(
+    source: AuditVerifySource,
+    mode: &str,
+    record_count: usize,
+    verified_records: usize,
+    chain_head: Option<String>,
+    errors: Vec<Value>,
+) -> Value {
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "event": "audit.verify",
+        "timestamp_ms": now_millis(),
+        "source": source.source,
+        "source_kind": source.source_kind,
+        "mode": mode,
+        "status": if errors.is_empty() { "ok" } else { "failed" },
+        "record_count": record_count,
+        "verified_records": verified_records,
+        "hash_algorithm": if mode == "export" { json!("sha256") } else { Value::Null },
+        "chain_head": chain_head,
+        "errors": errors,
+    })
+}
+
+fn audit_verify_error(code: &'static str, line: usize, message: impl Into<String>) -> Value {
+    json!({
+        "code": code,
+        "line": line,
+        "message": message.into(),
+    })
 }
 
 fn run_dashboard(session: Option<String>, args: DashboardArgs) -> Result<u8, MosaicError> {
@@ -2913,6 +3328,17 @@ fn print_value(value: Value) -> Result<(), MosaicError> {
     map_stdout_write_result(write_json_line(&mut stdout, value))
 }
 
+fn print_ndjson_values(values: &[Value]) -> Result<(), MosaicError> {
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    for value in values {
+        if let Err(error) = writeln!(stdout, "{value}") {
+            return map_stdout_write_result(Err(error));
+        }
+    }
+    map_stdout_write_result(stdout.flush())
+}
+
 fn map_stdout_write_result(result: io::Result<()>) -> Result<(), MosaicError> {
     match result {
         Ok(()) => Ok(()),
@@ -2947,6 +3373,37 @@ fn now_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default()
+}
+
+fn canonical_json(value: &Value) -> String {
+    value.to_string()
+}
+
+fn audit_chain_hash(sequence: usize, previous_hash: Option<&str>, record_hash: &str) -> String {
+    sha256_prefixed(
+        format!(
+            "mosaic.audit.chain.v1\n{sequence}\n{}\n{record_hash}\n",
+            previous_hash.unwrap_or("")
+        )
+        .as_bytes(),
+    )
+}
+
+fn sha256_prefixed(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    format!("sha256:{}", lower_hex(&digest))
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
 }
 
 fn enqueue_prompt(

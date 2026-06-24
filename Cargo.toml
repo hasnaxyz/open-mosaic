@@ -56,6 +56,7 @@ suggest = { workspace = true }
 thiserror = { workspace = true }
 isahc = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
