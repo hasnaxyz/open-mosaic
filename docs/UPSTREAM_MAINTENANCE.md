@@ -27,7 +27,7 @@ git remote set-url --push upstream DISABLED
 git remote -v
 ```
 
-`origin` can point at `hasnaxyz/open-mosaic` or a maintainer's fork. The
+`origin` can point at `hasna/mosaic` or a maintainer's fork. The
 important invariant is that `upstream` is pull-only.
 
 ## Before A Sync

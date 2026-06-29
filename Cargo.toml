@@ -3,11 +3,12 @@ name = "zellij"
 build = "src/build.rs"
 authors = ["Aram Drevekenin <aram@poor.dev>"]
 description = "Open Mosaic agentic terminal workspace forked from Zellij"
-homepage = "https://github.com/hasnaxyz/open-mosaic"
+homepage = "https://github.com/hasna/mosaic"
 include = [
   "src/**/*",
   "assets/layouts/*",
   "assets/config/*",
+  "LICENSE",
   "LICENSE.md",
   "NOTICE.md",
   "README.md",
@@ -102,8 +103,8 @@ members = [
 
 [workspace.package]
 edition = "2021"
-license = "MIT"
-repository = "https://github.com/hasnaxyz/open-mosaic"
+license = "Apache-2.0"
+repository = "https://github.com/hasna/mosaic"
 version = "0.45.0"
 # NOTE: When updating this, modify `channel` in `rust-toolchain.toml` accordingly
 rust-version = "1.92"
@@ -164,12 +165,13 @@ codegen-units = 1
 [package.metadata.deb]
 name = "open-mosaic"
 depends = "$auto"
-license-file = ["LICENSE.md", "4"]
+license-file = ["LICENSE", "4"]
 assets = [
   ["assets/man/zellij.1", "usr/share/man/man1/zellij.1", "644"],
   ["target/release/zellij", "usr/bin/zellij", "755"],
   ["target/release/mosaic", "usr/bin/mosaic", "755"],
   ["GOVERNANCE.md", "usr/share/doc/open-mosaic/GOVERNANCE.md", "644"],
+  ["LICENSE.md", "usr/share/doc/open-mosaic/LICENSE-UPSTREAM-MIT.md", "644"],
   ["NOTICE.md", "usr/share/doc/open-mosaic/NOTICE.md", "644"],
   ["schemas/*.json", "usr/share/doc/open-mosaic/schemas/", "644"],
   ["scripts/check-upstream-hygiene.sh", "usr/share/doc/open-mosaic/check-upstream-hygiene.sh", "644"],

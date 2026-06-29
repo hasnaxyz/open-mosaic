@@ -2,7 +2,8 @@
 
 Open Mosaic is an OSS-first agentic terminal workspace derived from
 [Zellij](https://github.com/zellij-org/zellij). Zellij's MIT license and
-copyright notices are preserved in `LICENSE.md`.
+copyright notices are preserved in `LICENSE.md`. The Hasna Open Mosaic
+distribution is licensed under Apache-2.0; see `LICENSE`.
 
 The Open Mosaic project adds Mosaic-specific control surfaces, agent workflow
 primitives, structured observation, prompt delivery receipts, audit records,

@@ -90,8 +90,8 @@ Mosaic additions are fork-specific unless they are separately accepted upstream
 by Zellij.
 
 The fork does not claim to be upstream Zellij, and it preserves Zellij's MIT
-license notices and attribution. See [NOTICE.md](NOTICE.md) and
-[LICENSE.md](LICENSE.md).
+license notices and attribution. See [NOTICE.md](NOTICE.md) and the upstream
+license text in [LICENSE.md](LICENSE.md).
 
 Migration guidance from upstream Zellij and tmux is in
 [docs/MIGRATION.md](docs/MIGRATION.md). A focused comparison for agent
@@ -128,5 +128,6 @@ architecture boundaries in
 
 ## License
 
-MIT. Open Mosaic is derived from Zellij and preserves the upstream license and
-copyright notices.
+Apache-2.0 for the Hasna Open Mosaic distribution. Open Mosaic is derived from
+Zellij and preserves the upstream MIT license and copyright notices in
+[LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md).
