@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/hasnaxyz/open-mosaic/schemas/mosaic.control.v1.schema.json",
+  "$id": "https://github.com/hasna/mosaic/schemas/mosaic.control.v1.schema.json",
   "title": "Open Mosaic control API v1",
   "description": "Versioned JSON and NDJSON envelopes emitted by the Open Mosaic control CLI.",
   "oneOf": [

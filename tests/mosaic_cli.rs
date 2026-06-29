@@ -52,7 +52,7 @@ fn mosaic_control_schema_covers_public_agent_events() {
 
     assert_eq!(
         schema["$id"],
-        "https://github.com/hasnaxyz/open-mosaic/schemas/mosaic.control.v1.schema.json"
+        "https://github.com/hasna/mosaic/schemas/mosaic.control.v1.schema.json"
     );
     assert_eq!(
         schema["$defs"]["schemaVersion"]["const"],
